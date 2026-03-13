@@ -5,6 +5,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.IBinder
@@ -19,6 +20,10 @@ class MeshForegroundService : Service() {
     companion object {
         const val CHANNEL_ID = "mesh_service_channel"
         const val NOTIFICATION_ID = 1
+
+        fun startIntent(context: Context): Intent {
+            return Intent(context, MeshForegroundService::class.java)
+        }
     }
 
     override fun onCreate() {

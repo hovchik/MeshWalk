@@ -19,8 +19,12 @@ android {
     }
 
     buildTypes {
+        debug {
+            buildConfigField("boolean", "MESH_DEBUG", "true")
+        }
         release {
             isMinifyEnabled = false
+            buildConfigField("boolean", "MESH_DEBUG", "false")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"

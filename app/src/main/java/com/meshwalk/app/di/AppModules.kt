@@ -32,7 +32,7 @@ object DatabaseModule {
             MeshWalkDatabase::class.java,
             MeshWalkDatabase.DATABASE_NAME
         )
-            .fallbackToDestructiveMigration(dropAllTables = true)
+            .fallbackToDestructiveMigration()
             .build()
     }
 
