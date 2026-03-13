@@ -65,27 +65,18 @@ class NetworkGraphViewModel @Inject constructor(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun NetworkGraphScreen(viewModel: NetworkGraphViewModel = hiltViewModel()) {
     val state by viewModel.state.collectAsState()
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Network Map") },
-                actions = {
-                    Text(
-                        "${state.peerCount} peers • ${state.routeCount} routes",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(end = 16.dp)
-                    )
-                }
-            )
-        }
-    ) { padding ->
-        Column(modifier = Modifier.padding(padding)) {
+    Column {
+        Text(
+            "${state.peerCount} peers • ${state.routeCount} routes",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+        )
+        Column {
             // Legend
             Row(
                 modifier = Modifier

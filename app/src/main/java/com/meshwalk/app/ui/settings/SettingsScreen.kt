@@ -55,7 +55,6 @@ class SettingsViewModel @Inject constructor(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
     onDiagnostics: () -> Unit,
@@ -63,14 +62,10 @@ fun SettingsScreen(
 ) {
     val state by viewModel.state.collectAsState()
 
-    Scaffold(
-        topBar = { TopAppBar(title = { Text("Settings") }) }
-    ) { padding ->
-        Column(
-            modifier = Modifier
-                .padding(padding)
-                .verticalScroll(rememberScrollState())
-        ) {
+    Column(
+        modifier = Modifier
+            .verticalScroll(rememberScrollState())
+    ) {
             // Identity section
             state.identity?.let { identity ->
                 SectionHeader("Identity")
@@ -161,8 +156,7 @@ fun SettingsScreen(
                 trailingContent = { Icon(Icons.Filled.ChevronRight, null) }
             )
 
-            Spacer(modifier = Modifier.height(32.dp))
-        }
+        Spacer(modifier = Modifier.height(32.dp))
     }
 }
 

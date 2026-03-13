@@ -62,7 +62,6 @@ class ChatListViewModel @Inject constructor(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChatListScreen(
     onChatClick: (conversationId: String, peerNodeId: String) -> Unit,
@@ -75,43 +74,29 @@ fun ChatListScreen(
         if (state.needsSetup) onNeedSetup()
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Chats") },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface
-                )
-            )
+    if (state.isLoading) {
+        Box(
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.Center
+        ) {
+            CircularProgressIndicator()
         }
-    ) { padding ->
-        if (state.isLoading) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(padding),
-                contentAlignment = Alignment.Center
-            ) {
-                CircularProgressIndicator()
-            }
-        } else if (state.conversations.isEmpty()) {
-            EmptyChatState(modifier = Modifier.padding(padding))
-        } else {
-            LazyColumn(
-                modifier = Modifier.padding(padding),
-                contentPadding = PaddingValues(vertical = 8.dp)
-            ) {
-                items(state.conversations, key = { it.conversationId }) { conversation ->
-                    ConversationItem(
-                        conversation = conversation,
-                        onClick = {
-                            onChatClick(
-                                conversation.conversationId,
-                                conversation.participants.firstOrNull() ?: ""
-                            )
-                        }
-                    )
-                }
+    } else if (state.conversations.isEmpty()) {
+        EmptyChatState()
+    } else {
+        LazyColumn(
+            contentPadding = PaddingValues(vertical = 8.dp)
+        ) {
+            items(state.conversations, key = { it.conversationId }) { conversation ->
+                ConversationItem(
+                    conversation = conversation,
+                    onClick = {
+                        onChatClick(
+                            conversation.conversationId,
+                            conversation.participants.firstOrNull() ?: ""
+                        )
+                    }
+                )
             }
         }
     }

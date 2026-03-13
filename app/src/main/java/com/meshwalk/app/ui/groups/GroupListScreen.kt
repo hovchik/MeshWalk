@@ -74,7 +74,6 @@ class GroupListViewModel @Inject constructor(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun GroupListScreen(
     onGroupClick: (groupId: String) -> Unit = {},
@@ -95,9 +94,6 @@ fun GroupListScreen(
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
-        topBar = {
-            TopAppBar(title = { Text("Groups") })
-        },
         floatingActionButton = {
             FloatingActionButton(
                 onClick = { showCreateDialog = true },

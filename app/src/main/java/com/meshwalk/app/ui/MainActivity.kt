@@ -33,6 +33,7 @@ import com.meshwalk.app.ui.network.NetworkGraphScreen
 import com.meshwalk.app.ui.onboarding.OnboardingScreen
 import com.meshwalk.app.ui.peers.PeersScreen
 import com.meshwalk.app.ui.settings.SettingsScreen
+import com.meshwalk.app.ui.components.TopMenuBar
 import com.meshwalk.app.ui.theme.MeshWalkTheme
 import dagger.hilt.android.AndroidEntryPoint
 
@@ -118,15 +119,29 @@ enum class BottomNavItem(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MeshWalkApp() {
+fun MeshWalkApp(mainViewModel: MainViewModel = hiltViewModel()) {
     val navController = rememberNavController()
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentDestination = navBackStackEntry?.destination
 
     val bottomNavRoutes = BottomNavItem.entries.map { it.route }
     val showBottomBar = currentDestination?.route in bottomNavRoutes
+    val showTopMenu = currentDestination?.route in bottomNavRoutes
+
+    val identity by mainViewModel.identity.collectAsState()
+    val meshStatus by mainViewModel.meshStatus.collectAsState()
+    val nearestPeer by mainViewModel.nearestPeer.collectAsState()
 
     Scaffold(
+        topBar = {
+            if (showTopMenu) {
+                TopMenuBar(
+                    identity = identity,
+                    meshStatus = meshStatus,
+                    nearestPeer = nearestPeer
+                )
+            }
+        },
         bottomBar = {
             if (showBottomBar) {
                 NavigationBar {
