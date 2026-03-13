@@ -36,6 +36,7 @@ class ChatViewModel @Inject constructor(
     private val conversationRepo: ConversationRepository,
     private val identityRepo: IdentityRepository,
     private val peerRepo: PeerRepository,
+    private val settingsRepo: SettingsRepository,
     private val sendMessage: SendMessageUseCase
 ) : ViewModel() {
 
@@ -48,7 +49,9 @@ class ChatViewModel @Inject constructor(
         val isEncrypted: Boolean = true,
         val peerOnline: Boolean = false,
         val selfNodeId: String = "",
-        val sendError: String? = null
+        val sendError: String? = null,
+        val showHopCount: Boolean = false,
+        val showEncryptionBadge: Boolean = true
     )
 
     private val _state = MutableStateFlow(UiState())
@@ -67,10 +70,22 @@ class ChatViewModel @Inject constructor(
 
             // Clear unread
             conversationRepo.clearUnread(conversationId)
+        }
 
-            // Observe messages
+        // Observe messages
+        viewModelScope.launch {
             messageRepo.observeMessages(conversationId).collect { messages ->
                 _state.value = _state.value.copy(messages = messages)
+            }
+        }
+
+        // Observe settings for display preferences
+        viewModelScope.launch {
+            settingsRepo.observeSettings().collect { settings ->
+                _state.value = _state.value.copy(
+                    showHopCount = settings.showHopCount,
+                    showEncryptionBadge = settings.showEncryptionBadge
+                )
             }
         }
     }
@@ -153,7 +168,7 @@ fun ChatScreen(
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
-                            if (state.isEncrypted) {
+                            if (state.isEncrypted && state.showEncryptionBadge) {
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Icon(
                                     Icons.Filled.Lock,
@@ -217,7 +232,8 @@ fun ChatScreen(
             items(state.messages, key = { it.messageId }) { message ->
                 MessageBubble(
                     message = message,
-                    isOutgoing = !message.isIncoming
+                    isOutgoing = !message.isIncoming,
+                    showHopCount = state.showHopCount
                 )
             }
         }
@@ -227,7 +243,8 @@ fun ChatScreen(
 @Composable
 private fun MessageBubble(
     message: MeshMessage,
-    isOutgoing: Boolean
+    isOutgoing: Boolean,
+    showHopCount: Boolean = false
 ) {
     val alignment = if (isOutgoing) Alignment.CenterEnd else Alignment.CenterStart
     val bubbleColor = if (isOutgoing) {
@@ -300,7 +317,7 @@ private fun MessageBubble(
                         )
                     }
 
-                    if (message.hopCount > 0) {
+                    if (showHopCount && message.hopCount > 0) {
                         Spacer(modifier = Modifier.width(4.dp))
                         Text(
                             text = "${message.hopCount}h",

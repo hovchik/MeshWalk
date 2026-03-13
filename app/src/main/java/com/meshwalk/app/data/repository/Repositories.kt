@@ -359,6 +359,8 @@ class SettingsRepositoryImpl @Inject constructor(
         private val NOTIFICATIONS = booleanPreferencesKey("notifications")
         private val AUTO_START = booleanPreferencesKey("auto_start")
         private val MESSAGE_TTL = intPreferencesKey("message_ttl")
+        private val SHOW_HOP_COUNT = booleanPreferencesKey("show_hop_count")
+        private val SHOW_ENCRYPTION_BADGE = booleanPreferencesKey("show_encryption_badge")
         private val ONBOARDING_DONE = booleanPreferencesKey("onboarding_done")
     }
 
@@ -379,6 +381,8 @@ class SettingsRepositoryImpl @Inject constructor(
             prefs[NOTIFICATIONS] = settings.notificationsEnabled
             prefs[AUTO_START] = settings.autoStartMesh
             prefs[MESSAGE_TTL] = settings.messageTtl
+            prefs[SHOW_HOP_COUNT] = settings.showHopCount
+            prefs[SHOW_ENCRYPTION_BADGE] = settings.showEncryptionBadge
         }
     }
 
@@ -401,6 +405,8 @@ class SettingsRepositoryImpl @Inject constructor(
         } ?: DarkModeSetting.SYSTEM,
         notificationsEnabled = this[NOTIFICATIONS] ?: true,
         autoStartMesh = this[AUTO_START] ?: true,
-        messageTtl = this[MESSAGE_TTL] ?: MeshPacket.DEFAULT_TTL
+        messageTtl = this[MESSAGE_TTL] ?: MeshPacket.DEFAULT_TTL,
+        showHopCount = this[SHOW_HOP_COUNT] ?: false,
+        showEncryptionBadge = this[SHOW_ENCRYPTION_BADGE] ?: true
     )
 }

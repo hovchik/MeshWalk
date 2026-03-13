@@ -36,7 +36,8 @@ class ChatListViewModel @Inject constructor(
     data class UiState(
         val conversations: List<Conversation> = emptyList(),
         val needsSetup: Boolean = false,
-        val isLoading: Boolean = true
+        val isLoading: Boolean = true,
+        val showEncryptionBadge: Boolean = true
     )
 
     private val _state = MutableStateFlow(UiState())
@@ -52,12 +53,16 @@ class ChatListViewModel @Inject constructor(
                 return@launch
             }
 
-            conversationRepo.observeConversations().collect { conversations ->
-                _state.value = UiState(
+            combine(
+                conversationRepo.observeConversations(),
+                settingsRepo.observeSettings()
+            ) { conversations, settings ->
+                UiState(
                     conversations = conversations.filter { it.type == ConversationType.DIRECT },
-                    isLoading = false
+                    isLoading = false,
+                    showEncryptionBadge = settings.showEncryptionBadge
                 )
-            }
+            }.collect { _state.value = it }
         }
     }
 }
@@ -90,6 +95,7 @@ fun ChatListScreen(
             items(state.conversations, key = { it.conversationId }) { conversation ->
                 ConversationItem(
                     conversation = conversation,
+                    showEncryptionBadge = state.showEncryptionBadge,
                     onClick = {
                         onChatClick(
                             conversation.conversationId,
@@ -105,6 +111,7 @@ fun ChatListScreen(
 @Composable
 private fun ConversationItem(
     conversation: Conversation,
+    showEncryptionBadge: Boolean = true,
     onClick: () -> Unit
 ) {
     ListItem(
@@ -151,7 +158,7 @@ private fun ConversationItem(
                         Text(conversation.unreadCount.toString())
                     }
                 }
-                if (conversation.isEncrypted) {
+                if (conversation.isEncrypted && showEncryptionBadge) {
                     Icon(
                         Icons.Filled.Lock,
                         contentDescription = "Encrypted",
