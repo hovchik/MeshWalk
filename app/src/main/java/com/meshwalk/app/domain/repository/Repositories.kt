@@ -8,6 +8,7 @@ interface IdentityRepository {
     suspend fun getActiveIdentity(): NodeIdentity?
     suspend fun setActiveIdentity(nodeId: String)
     suspend fun deleteIdentity(nodeId: String)
+    suspend fun updateProfile(nodeId: String, name: String?, type: IdentityType)
     fun observeActiveIdentity(): Flow<NodeIdentity?>
     suspend fun getAllIdentities(): List<NodeIdentity>
 }

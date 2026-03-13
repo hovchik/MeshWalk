@@ -1,64 +1,66 @@
 package com.meshwalk.app
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
-import androidx.compose.runtime.getValue
-import androidx.compose.ui.Modifier
-import androidx.navigation.NavDestination.Companion.hierarchy
-import androidx.navigation.compose.currentBackStackEntryAsState
-import androidx.navigation.compose.rememberNavController
-import com.meshwalk.app.ui.navigation.MeshWalkNavHost
-import com.meshwalk.app.ui.navigation.NavDestination
+import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
+import com.meshwalk.app.mesh.service.MeshForegroundService
+import com.meshwalk.app.ui.MeshWalkApp
+import com.meshwalk.app.ui.theme.MeshWalkTheme
 import dagger.hilt.android.AndroidEntryPoint
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
+
+    private val permissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { results ->
+        if (results.values.all { it }) {
+            startMeshService()
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent {
-            MaterialTheme {
-                val navController = rememberNavController()
-                val navBackStackEntry by navController.currentBackStackEntryAsState()
-                val currentDestination = navBackStackEntry?.destination
+        enableEdgeToEdge()
+        requestPermissions()
 
-                Scaffold(
-                    bottomBar = {
-                        NavigationBar {
-                            NavDestination.entries.forEach { dest ->
-                                NavigationBarItem(
-                                    icon = { Icon(dest.icon, contentDescription = dest.label) },
-                                    label = { Text(dest.label) },
-                                    selected = currentDestination?.hierarchy?.any {
-                                        it.route == dest.route
-                                    } == true,
-                                    onClick = {
-                                        navController.navigate(dest.route) {
-                                            popUpTo(navController.graph.startDestinationId) {
-                                                saveState = true
-                                            }
-                                            launchSingleTop = true
-                                            restoreState = true
-                                        }
-                                    }
-                                )
-                            }
-                        }
-                    }
-                ) { innerPadding ->
-                    MeshWalkNavHost(
-                        navController = navController,
-                        modifier = Modifier.padding(innerPadding)
-                    )
-                }
+        setContent {
+            MeshWalkTheme {
+                MeshWalkApp()
             }
         }
+    }
+
+    private fun requestPermissions() {
+        val permissions = mutableListOf(
+            Manifest.permission.ACCESS_FINE_LOCATION,
+            Manifest.permission.BLUETOOTH_SCAN,
+            Manifest.permission.BLUETOOTH_CONNECT,
+            Manifest.permission.BLUETOOTH_ADVERTISE,
+        )
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            permissions.add(Manifest.permission.POST_NOTIFICATIONS)
+            permissions.add(Manifest.permission.NEARBY_WIFI_DEVICES)
+        }
+
+        val needed = permissions.filter {
+            ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
+        }
+
+        if (needed.isNotEmpty()) {
+            permissionLauncher.launch(needed.toTypedArray())
+        } else {
+            startMeshService()
+        }
+    }
+
+    private fun startMeshService() {
+        startForegroundService(MeshForegroundService.startIntent(this))
     }
 }

@@ -64,6 +64,10 @@ class IdentityRepositoryImpl @Inject constructor(
         keyStorage.deleteKeys(nodeId)
     }
 
+    override suspend fun updateProfile(nodeId: String, name: String?, type: IdentityType) {
+        identityDao.updateProfile(nodeId, name, type.name)
+    }
+
     override fun observeActiveIdentity(): Flow<NodeIdentity?> {
         return identityDao.observeActive().map { it?.toDomain() }
     }

@@ -24,6 +24,12 @@ interface IdentityDao {
     @Query("SELECT * FROM identities")
     suspend fun getAll(): List<IdentityEntity>
 
+    @Query("UPDATE identities SET displayName = :name WHERE nodeId = :nodeId")
+    suspend fun updateDisplayName(nodeId: String, name: String?)
+
+    @Query("UPDATE identities SET identityType = :type, displayName = :name WHERE nodeId = :nodeId")
+    suspend fun updateProfile(nodeId: String, name: String?, type: String)
+
     @Query("DELETE FROM identities WHERE nodeId = :nodeId")
     suspend fun delete(nodeId: String)
 }
