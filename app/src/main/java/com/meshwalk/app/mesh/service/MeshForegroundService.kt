@@ -13,6 +13,9 @@ import androidx.core.app.NotificationCompat
 import com.meshwalk.app.MainActivity
 import com.meshwalk.app.R
 import dagger.hilt.android.AndroidEntryPoint
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 @AndroidEntryPoint
 class MeshForegroundService : Service() {
@@ -20,6 +23,9 @@ class MeshForegroundService : Service() {
     companion object {
         const val CHANNEL_ID = "mesh_service_channel"
         const val NOTIFICATION_ID = 1
+
+        private val _isRunning = MutableStateFlow(false)
+        val isRunning: StateFlow<Boolean> = _isRunning.asStateFlow()
 
         fun startIntent(context: Context): Intent {
             return Intent(context, MeshForegroundService::class.java)
@@ -33,12 +39,14 @@ class MeshForegroundService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startForeground(NOTIFICATION_ID, buildNotification())
+        _isRunning.value = true
         return START_STICKY
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
+        _isRunning.value = false
         super.onDestroy()
     }
 

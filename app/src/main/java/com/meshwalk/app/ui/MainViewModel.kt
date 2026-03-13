@@ -6,6 +6,7 @@ import com.meshwalk.app.domain.model.NodeIdentity
 import com.meshwalk.app.domain.model.PeerNode
 import com.meshwalk.app.domain.repository.IdentityRepository
 import com.meshwalk.app.domain.repository.PeerRepository
+import com.meshwalk.app.mesh.service.MeshForegroundService
 import com.meshwalk.app.ui.components.MeshStatus
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
@@ -23,10 +24,14 @@ class MainViewModel @Inject constructor(
     private val peers: StateFlow<List<PeerNode>> = peerRepo.observeNearbyPeers()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    val meshStatus: StateFlow<MeshStatus> = peers.map { peerList ->
+    val meshStatus: StateFlow<MeshStatus> = combine(
+        peers,
+        MeshForegroundService.isRunning
+    ) { peerList, serviceRunning ->
         when {
             peerList.any { it.isConnected } -> MeshStatus.ONLINE
             peerList.isNotEmpty() -> MeshStatus.SCANNING
+            serviceRunning -> MeshStatus.SCANNING
             else -> MeshStatus.OFFLINE
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), MeshStatus.OFFLINE)
