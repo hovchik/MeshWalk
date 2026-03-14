@@ -56,7 +56,9 @@ class NearbyConnectionsTransport @Inject constructor(
     // Track endpoint -> nodeId mapping (accessed from multiple callbacks)
     private val endpointNodeMap = java.util.concurrent.ConcurrentHashMap<String, String>()
     private val connectedEndpoints = java.util.Collections.synchronizedSet(mutableSetOf<String>())
+    private val pendingEndpoints = java.util.Collections.synchronizedSet(mutableSetOf<String>())
     private var currentAdvertisement: NodeAdvertisement? = null
+    private var ourNodeId: String? = null
 
     // -- Discovery --
 
@@ -79,7 +81,26 @@ class NearbyConnectionsTransport @Inject constructor(
                 )
             )
 
-            // Auto-connect to discovered endpoints for mesh operation
+            // Skip if already connected or pending connection to this endpoint
+            if (endpointId in connectedEndpoints || endpointId in pendingEndpoints) {
+                Timber.d("Already connected/pending to $endpointId, skipping connection request")
+                return
+            }
+
+            // Skip if already connected to this nodeId via a different endpoint
+            if (nodeId != null && isNodeConnectedOrPending(nodeId)) {
+                Timber.d("Already connected/pending to node ${nodeId.take(8)}, skipping")
+                return
+            }
+
+            // Deterministic tie-breaking: only the node with the lower nodeId initiates
+            // the connection to avoid both sides racing to connect simultaneously.
+            val myNodeId = ourNodeId
+            if (myNodeId != null && nodeId != null && myNodeId > nodeId) {
+                Timber.d("Deferring connection to ${nodeId.take(8)} (they should initiate)")
+                return
+            }
+
             requestConnection(endpointId)
         }
 
@@ -94,13 +115,27 @@ class NearbyConnectionsTransport @Inject constructor(
 
     private val connectionLifecycleCallback = object : ConnectionLifecycleCallback() {
         override fun onConnectionInitiated(endpointId: String, info: ConnectionInfo) {
-            Timber.d("Connection initiated: $endpointId, name=${info.endpointName}")
+            Timber.d("Connection initiated: $endpointId, name=${info.endpointName}, isIncoming=${info.isIncomingConnection}")
 
             // Parse nodeId from connecting peer's encoded name
             val (displayName, nodeId) = parseEncodedName(info.endpointName)
             if (nodeId != null && !endpointNodeMap.containsKey(endpointId)) {
                 endpointNodeMap[endpointId] = nodeId
             }
+
+            // If we already have an active connection to this nodeId via a different
+            // endpoint, reject the new one to avoid duplicate connections.
+            if (nodeId != null) {
+                val existingEndpoint = endpointNodeMap.entries
+                    .firstOrNull { it.value == nodeId && it.key != endpointId && it.key in connectedEndpoints }
+                if (existingEndpoint != null) {
+                    Timber.d("Already connected to ${nodeId.take(8)} via ${existingEndpoint.key}, rejecting duplicate")
+                    connectionsClient.rejectConnection(endpointId)
+                    return
+                }
+            }
+
+            pendingEndpoints.add(endpointId)
 
             _events.tryEmit(
                 TransportEvent.ConnectionRequested(
@@ -114,10 +149,12 @@ class NearbyConnectionsTransport @Inject constructor(
             connectionsClient.acceptConnection(endpointId, payloadCallback)
                 .addOnFailureListener { e ->
                     Timber.e(e, "Failed to accept connection from $endpointId")
+                    pendingEndpoints.remove(endpointId)
                 }
         }
 
         override fun onConnectionResult(endpointId: String, result: ConnectionResolution) {
+            pendingEndpoints.remove(endpointId)
             when (result.status.statusCode) {
                 ConnectionsStatusCodes.STATUS_OK -> {
                     Timber.d("Connected to: $endpointId")
@@ -147,6 +184,7 @@ class NearbyConnectionsTransport @Inject constructor(
         override fun onDisconnected(endpointId: String) {
             Timber.d("Disconnected: $endpointId")
             connectedEndpoints.remove(endpointId)
+            pendingEndpoints.remove(endpointId)
             _events.tryEmit(TransportEvent.Disconnected(endpointId))
         }
     }
@@ -185,6 +223,7 @@ class NearbyConnectionsTransport @Inject constructor(
 
     override suspend fun startAdvertising(nodeInfo: NodeAdvertisement): Result<Unit> {
         currentAdvertisement = nodeInfo
+        ourNodeId = nodeInfo.nodeId
         return suspendCancellableCoroutine { cont ->
             val options = AdvertisingOptions.Builder()
                 .setStrategy(STRATEGY)
@@ -272,6 +311,7 @@ class NearbyConnectionsTransport @Inject constructor(
     override suspend fun disconnectAll() {
         connectionsClient.stopAllEndpoints()
         connectedEndpoints.clear()
+        pendingEndpoints.clear()
         endpointNodeMap.clear()
     }
 
@@ -280,6 +320,7 @@ class NearbyConnectionsTransport @Inject constructor(
     // -- Helpers --
 
     private fun requestConnection(endpointId: String) {
+        pendingEndpoints.add(endpointId)
         val name = currentAdvertisement?.let { encodeAdvertisingName(it) } ?: "MeshWalk Node"
         connectionsClient.requestConnection(name, endpointId, connectionLifecycleCallback)
             .addOnSuccessListener {
@@ -287,7 +328,17 @@ class NearbyConnectionsTransport @Inject constructor(
             }
             .addOnFailureListener { e ->
                 Timber.w(e, "Failed to request connection to $endpointId")
+                pendingEndpoints.remove(endpointId)
             }
+    }
+
+    /**
+     * Check if we already have a connection or pending connection to a nodeId.
+     */
+    private fun isNodeConnectedOrPending(nodeId: String): Boolean {
+        return endpointNodeMap.entries.any { (endpointId, nid) ->
+            nid == nodeId && (endpointId in connectedEndpoints || endpointId in pendingEndpoints)
+        }
     }
 
     /**
