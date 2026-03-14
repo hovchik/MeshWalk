@@ -148,6 +148,29 @@ class MessageEnvelopeManager @Inject constructor(
         )
     }
 
+    /**
+     * Decrypt a received group MeshPacket into a MeshMessage.
+     * Uses the sender's group key from GroupKeyManager.
+     */
+    fun decryptForGroup(
+        packet: MeshPacket,
+        groupId: String,
+        receivingKey: SecretKey
+    ): MeshMessage? {
+        return try {
+            val plaintext = decryptAesGcm(
+                packet.encryptedPayload,
+                receivingKey,
+                packet.nonce,
+                buildAad(packet.sourceNodeId, groupId, 0)
+            )
+            deserializeMessage(plaintext, packet)
+        } catch (e: Exception) {
+            Timber.e(e, "Failed to decrypt group message from ${packet.sourceNodeId}")
+            null
+        }
+    }
+
     // -- AES-GCM operations --
 
     fun encryptAesGcm(

@@ -16,10 +16,13 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.meshwalk.app.domain.model.ConversationType
 import com.meshwalk.app.domain.model.GroupInfo
+import com.meshwalk.app.domain.model.GroupInvitation
 import com.meshwalk.app.domain.model.PeerNode
 import com.meshwalk.app.domain.repository.GroupRepository
+import com.meshwalk.app.domain.repository.IdentityRepository
 import com.meshwalk.app.domain.repository.PeerRepository
 import com.meshwalk.app.domain.usecase.CreateGroupUseCase
+import com.meshwalk.app.mesh.group.GroupControlManager
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -29,12 +32,15 @@ import javax.inject.Inject
 class GroupListViewModel @Inject constructor(
     private val groupRepo: GroupRepository,
     private val peerRepo: PeerRepository,
-    private val createGroup: CreateGroupUseCase
+    private val identityRepo: IdentityRepository,
+    private val createGroup: CreateGroupUseCase,
+    private val groupControlManager: GroupControlManager
 ) : ViewModel() {
 
     data class UiState(
         val groups: List<GroupInfo> = emptyList(),
         val availablePeers: List<PeerNode> = emptyList(),
+        val pendingInvitations: List<GroupInvitation> = emptyList(),
         val error: String? = null,
         val isCreating: Boolean = false
     )
@@ -42,12 +48,13 @@ class GroupListViewModel @Inject constructor(
     private val _state = MutableStateFlow(UiState())
     val state = _state.asStateFlow()
 
-    // Keep these for backward compat with UI collecting directly
     val groups: StateFlow<List<GroupInfo>> = groupRepo.observeGroups()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val availablePeers: StateFlow<List<PeerNode>> = peerRepo.observeNearbyPeers()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val pendingInvitations: StateFlow<List<GroupInvitation>> = groupControlManager.pendingInvitations
 
     fun createNewGroup(name: String, memberIds: List<String>, temporary: Boolean) {
         viewModelScope.launch {
@@ -69,6 +76,28 @@ class GroupListViewModel @Inject constructor(
         }
     }
 
+    fun acceptInvitation(invitation: GroupInvitation) {
+        viewModelScope.launch {
+            try {
+                val identity = identityRepo.getActiveIdentity() ?: return@launch
+                groupControlManager.acceptInvitation(invitation, identity.nodeId, identity.displayName)
+            } catch (e: Exception) {
+                _state.value = _state.value.copy(error = "Failed to accept: ${e.message}")
+            }
+        }
+    }
+
+    fun rejectInvitation(invitation: GroupInvitation) {
+        viewModelScope.launch {
+            try {
+                val identity = identityRepo.getActiveIdentity() ?: return@launch
+                groupControlManager.rejectInvitation(invitation, identity.nodeId)
+            } catch (e: Exception) {
+                _state.value = _state.value.copy(error = "Failed to reject: ${e.message}")
+            }
+        }
+    }
+
     fun clearError() {
         _state.value = _state.value.copy(error = null)
     }
@@ -80,11 +109,11 @@ fun GroupListScreen(
     viewModel: GroupListViewModel = hiltViewModel()
 ) {
     val groups by viewModel.groups.collectAsState()
+    val invitations by viewModel.pendingInvitations.collectAsState()
     val uiState by viewModel.state.collectAsState()
     var showCreateDialog by remember { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
 
-    // Show errors
     LaunchedEffect(uiState.error) {
         uiState.error?.let { error ->
             snackbarHostState.showSnackbar(error, duration = SnackbarDuration.Short)
@@ -103,7 +132,7 @@ fun GroupListScreen(
             }
         }
     ) { padding ->
-        if (groups.isEmpty()) {
+        if (groups.isEmpty() && invitations.isEmpty()) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -136,8 +165,41 @@ fun GroupListScreen(
                 modifier = Modifier.padding(padding),
                 contentPadding = PaddingValues(vertical = 8.dp)
             ) {
-                items(groups, key = { it.groupId }) { group ->
-                    GroupItem(group = group, onClick = { onGroupClick(group.groupId) })
+                // Pending invitations section
+                if (invitations.isNotEmpty()) {
+                    item {
+                        Text(
+                            "Pending Invitations",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                        )
+                    }
+                    items(invitations, key = { it.groupId }) { invitation ->
+                        InvitationItem(
+                            invitation = invitation,
+                            onAccept = { viewModel.acceptInvitation(invitation) },
+                            onReject = { viewModel.rejectInvitation(invitation) }
+                        )
+                    }
+                    item {
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                    }
+                }
+
+                // Groups section
+                if (groups.isNotEmpty()) {
+                    item {
+                        Text(
+                            "My Groups",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                        )
+                    }
+                    items(groups, key = { it.groupId }) { group ->
+                        GroupItem(group = group, onClick = { onGroupClick(group.groupId) })
+                    }
                 }
             }
         }
@@ -153,6 +215,47 @@ fun GroupListScreen(
             )
         }
     }
+}
+
+@Composable
+private fun InvitationItem(
+    invitation: GroupInvitation,
+    onAccept: () -> Unit,
+    onReject: () -> Unit
+) {
+    ListItem(
+        headlineContent = { Text(invitation.groupName) },
+        supportingContent = {
+            Text(
+                "From ${invitation.inviterName ?: invitation.inviterNodeId.take(8)} • ${invitation.memberCount} members",
+                style = MaterialTheme.typography.bodySmall
+            )
+        },
+        leadingContent = {
+            Icon(
+                Icons.Filled.Mail,
+                contentDescription = null,
+                modifier = Modifier.size(40.dp),
+                tint = MaterialTheme.colorScheme.primary
+            )
+        },
+        trailingContent = {
+            Row {
+                FilledTonalIconButton(
+                    onClick = onReject,
+                    colors = IconButtonDefaults.filledTonalIconButtonColors(
+                        containerColor = MaterialTheme.colorScheme.errorContainer
+                    )
+                ) {
+                    Icon(Icons.Filled.Close, "Reject")
+                }
+                Spacer(modifier = Modifier.width(4.dp))
+                FilledIconButton(onClick = onAccept) {
+                    Icon(Icons.Filled.Check, "Accept")
+                }
+            }
+        }
+    )
 }
 
 @Composable

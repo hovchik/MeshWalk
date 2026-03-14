@@ -87,7 +87,8 @@ class SendGroupMessageUseCase @Inject constructor(
 class CreateGroupUseCase @Inject constructor(
     private val groupRepo: GroupRepository,
     private val conversationRepo: ConversationRepository,
-    private val identityRepo: IdentityRepository
+    private val identityRepo: IdentityRepository,
+    private val groupControlManager: com.meshwalk.app.mesh.group.GroupControlManager
 ) {
     suspend operator fun invoke(
         name: String,
@@ -126,6 +127,10 @@ class CreateGroupUseCase @Inject constructor(
                 participants = members.map { it.nodeId }
             )
         )
+
+        // Send invitations to all members
+        groupControlManager.sendInvitations(group, self.nodeId)
+
         return group
     }
 }

@@ -140,6 +140,21 @@ class GroupKeyManager @Inject constructor(
         return memberNodeIds.filter { !keys.containsKey(it) }
     }
 
+    /**
+     * Find a receiving key for a sender across all groups.
+     * Returns (groupId, messageKey) or null if not found.
+     */
+    fun findReceivingKeyForSender(senderNodeId: String): Pair<String, SecretKey>? {
+        for ((groupId, members) in groupSenderKeys) {
+            val state = members[senderNodeId]
+            if (state != null) {
+                val key = deriveMessageKey(state.chainKey, state.iteration)
+                return Pair(groupId, key)
+            }
+        }
+        return null
+    }
+
     private fun deriveMessageKey(chainKey: SecretKey, iteration: Int): SecretKey {
         val mac = javax.crypto.Mac.getInstance("HmacSHA256")
         mac.init(chainKey)

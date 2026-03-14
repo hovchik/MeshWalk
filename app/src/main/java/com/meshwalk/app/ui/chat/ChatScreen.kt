@@ -22,6 +22,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.meshwalk.app.domain.model.*
 import com.meshwalk.app.domain.repository.*
+import com.meshwalk.app.domain.usecase.SendGroupMessageUseCase
 import com.meshwalk.app.domain.usecase.SendMessageUseCase
 import com.meshwalk.app.util.TimeUtils
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -37,7 +38,9 @@ class ChatViewModel @Inject constructor(
     private val identityRepo: IdentityRepository,
     private val peerRepo: PeerRepository,
     private val settingsRepo: SettingsRepository,
-    private val sendMessage: SendMessageUseCase
+    private val groupRepo: GroupRepository,
+    private val sendMessage: SendMessageUseCase,
+    private val sendGroupMessage: SendGroupMessageUseCase
 ) : ViewModel() {
 
     private val conversationId: String = savedStateHandle["conversationId"] ?: ""
@@ -51,7 +54,8 @@ class ChatViewModel @Inject constructor(
         val selfNodeId: String = "",
         val sendError: String? = null,
         val showHopCount: Boolean = false,
-        val showEncryptionBadge: Boolean = true
+        val showEncryptionBadge: Boolean = true,
+        val isGroupChat: Boolean = false
     )
 
     private val _state = MutableStateFlow(UiState())
@@ -60,13 +64,24 @@ class ChatViewModel @Inject constructor(
     init {
         viewModelScope.launch {
             val identity = identityRepo.getActiveIdentity()
-            val peer = peerRepo.getPeer(peerNodeId)
 
-            _state.value = _state.value.copy(
-                peerName = peer?.displayName ?: peerNodeId.take(8),
-                peerOnline = peer?.isConnected == true,
-                selfNodeId = identity?.nodeId ?: ""
-            )
+            // Check if this is a group conversation
+            val group = groupRepo.getGroup(conversationId)
+            if (group != null) {
+                _state.value = _state.value.copy(
+                    peerName = group.name,
+                    peerOnline = true,
+                    selfNodeId = identity?.nodeId ?: "",
+                    isGroupChat = true
+                )
+            } else {
+                val peer = peerRepo.getPeer(peerNodeId)
+                _state.value = _state.value.copy(
+                    peerName = peer?.displayName ?: peerNodeId.take(8),
+                    peerOnline = peer?.isConnected == true,
+                    selfNodeId = identity?.nodeId ?: ""
+                )
+            }
 
             // Clear unread
             conversationRepo.clearUnread(conversationId)
@@ -95,12 +110,20 @@ class ChatViewModel @Inject constructor(
         viewModelScope.launch {
             _state.value = _state.value.copy(sendError = null)
             try {
-                sendMessage(
-                    conversationId = conversationId,
-                    recipientNodeId = peerNodeId,
-                    text = text.trim(),
-                    senderNodeId = _state.value.selfNodeId
-                )
+                if (_state.value.isGroupChat) {
+                    sendGroupMessage(
+                        groupId = conversationId,
+                        text = text.trim(),
+                        senderNodeId = _state.value.selfNodeId
+                    )
+                } else {
+                    sendMessage(
+                        conversationId = conversationId,
+                        recipientNodeId = peerNodeId,
+                        text = text.trim(),
+                        senderNodeId = _state.value.selfNodeId
+                    )
+                }
             } catch (e: Exception) {
                 _state.value = _state.value.copy(
                     sendError = e.message ?: "Failed to send message"
@@ -153,21 +176,36 @@ fun ChatScreen(
                     Column {
                         Text(state.peerName ?: "Chat")
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Box(
-                                modifier = Modifier
-                                    .size(8.dp)
-                                    .clip(RoundedCornerShape(4.dp))
-                                    .background(
-                                        if (state.peerOnline) MaterialTheme.colorScheme.primary
-                                        else MaterialTheme.colorScheme.outline
-                                    )
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text(
-                                text = if (state.peerOnline) "Online" else "Offline",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
+                            if (state.isGroupChat) {
+                                Icon(
+                                    Icons.Filled.Group,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(12.dp),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "Group",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            } else {
+                                Box(
+                                    modifier = Modifier
+                                        .size(8.dp)
+                                        .clip(RoundedCornerShape(4.dp))
+                                        .background(
+                                            if (state.peerOnline) MaterialTheme.colorScheme.primary
+                                            else MaterialTheme.colorScheme.outline
+                                        )
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = if (state.peerOnline) "Online" else "Offline",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                             if (state.isEncrypted && state.showEncryptionBadge) {
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Icon(
