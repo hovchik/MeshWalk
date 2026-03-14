@@ -10,6 +10,7 @@ import com.meshwalk.app.domain.repository.MessageRepository
 import com.meshwalk.app.domain.repository.PeerRepository
 import com.meshwalk.app.domain.usecase.MeshOutboxPort
 import com.meshwalk.app.routing.engine.MeshRoutingEngine
+import kotlinx.coroutines.delay
 import timber.log.Timber
 import java.nio.ByteBuffer
 import java.util.UUID
@@ -72,9 +73,19 @@ class MeshOutbox @Inject constructor(
         }
     }
 
+    companion object {
+        /** Max time to wait for the peer's exchange key advertisement to arrive. */
+        private const val KEY_EXCHANGE_TIMEOUT_MS = 5_000L
+        private const val KEY_EXCHANGE_POLL_INTERVAL_MS = 250L
+    }
+
     /**
      * Ensure a pairwise session exists with the peer.
      * If no session exists, establish one using ECDH with the peer's exchange key.
+     *
+     * The peer's publicExchangeKey arrives asynchronously via an advertisement
+     * payload after connection. This method waits briefly for it to arrive
+     * rather than failing immediately.
      */
     private suspend fun ensureSession(ourNodeId: String, peerNodeId: String) {
         if (sessionManager.hasSession(ourNodeId, peerNodeId)) return
@@ -82,12 +93,26 @@ class MeshOutbox @Inject constructor(
         val ourExchangeKey = keyStorage.getExchangePrivateKey(ourNodeId)
             ?: throw IllegalStateException("No exchange private key for $ourNodeId")
 
-        val peer = peerRepo.getPeer(peerNodeId)
-        val peerExchangeKey = peer?.publicExchangeKey
-            ?: throw IllegalStateException(
-                "Waiting for key exchange with ${peer?.displayName ?: peerNodeId.take(8)}. " +
+        // Wait for the peer's exchange key to arrive via advertisement
+        var peerExchangeKey: ByteArray? = null
+        var peerDisplayName: String? = null
+        val deadline = System.currentTimeMillis() + KEY_EXCHANGE_TIMEOUT_MS
+
+        while (peerExchangeKey == null && System.currentTimeMillis() < deadline) {
+            val peer = peerRepo.getPeer(peerNodeId)
+            peerDisplayName = peer?.displayName
+            peerExchangeKey = peer?.publicExchangeKey
+            if (peerExchangeKey == null) {
+                delay(KEY_EXCHANGE_POLL_INTERVAL_MS)
+            }
+        }
+
+        if (peerExchangeKey == null) {
+            throw IllegalStateException(
+                "Waiting for key exchange with ${peerDisplayName ?: peerNodeId.take(8)}. " +
                 "Please try again in a moment."
             )
+        }
 
         sessionManager.establishSessionWithKeys(
             ourNodeId = ourNodeId,
