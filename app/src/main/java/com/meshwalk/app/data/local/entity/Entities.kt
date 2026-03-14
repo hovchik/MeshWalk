@@ -94,3 +94,22 @@ data class GroupEntity(
     val version: Long,
     val maxMembers: Int
 )
+
+@Entity(
+    tableName = "sender_keys",
+    primaryKeys = ["groupId", "senderNodeId"]
+)
+data class SenderKeyEntity(
+    val groupId: String,
+    val senderNodeId: String,
+    val chainKey: ByteArray,
+    val iteration: Int,
+    val createdAt: Long
+) {
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is SenderKeyEntity) return false
+        return groupId == other.groupId && senderNodeId == other.senderNodeId
+    }
+    override fun hashCode(): Int = 31 * groupId.hashCode() + senderNodeId.hashCode()
+}

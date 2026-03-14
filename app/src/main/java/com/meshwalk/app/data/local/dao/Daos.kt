@@ -108,7 +108,7 @@ interface PeerDao {
     @Query("DELETE FROM peers WHERE nodeId = :nodeId")
     suspend fun delete(nodeId: String)
 
-    @Query("DELETE FROM peers WHERE lastSeen < :threshold")
+    @Query("DELETE FROM peers WHERE lastSeen < :threshold AND publicExchangeKey IS NULL AND publicSigningKey IS NULL")
     suspend fun pruneStale(threshold: Long)
 }
 
@@ -128,6 +128,24 @@ interface RoutingDao {
 
     @Query("DELETE FROM routing_entries WHERE lastUpdated < :threshold")
     suspend fun pruneStale(threshold: Long)
+}
+
+@Dao
+interface SenderKeyDao {
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(key: SenderKeyEntity)
+
+    @Query("SELECT * FROM sender_keys WHERE groupId = :groupId AND senderNodeId = :senderNodeId")
+    suspend fun get(groupId: String, senderNodeId: String): SenderKeyEntity?
+
+    @Query("SELECT * FROM sender_keys WHERE groupId = :groupId")
+    suspend fun getByGroup(groupId: String): List<SenderKeyEntity>
+
+    @Query("DELETE FROM sender_keys WHERE groupId = :groupId")
+    suspend fun deleteByGroup(groupId: String)
+
+    @Query("DELETE FROM sender_keys WHERE groupId = :groupId AND senderNodeId = :senderNodeId")
+    suspend fun delete(groupId: String, senderNodeId: String)
 }
 
 @Dao
