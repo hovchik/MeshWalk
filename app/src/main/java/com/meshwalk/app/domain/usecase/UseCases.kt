@@ -73,12 +73,11 @@ class SendGroupMessageUseCase @Inject constructor(
         messageRepo.saveMessage(message)
         conversationRepo.updateLastMessage(groupId, text, message.timestamp)
 
-        // Fan-out: enqueue message for each group member
-        group.members
+        // Fan-out: enqueue the same encrypted message for each group member
+        val recipientNodeIds = group.members
             .filter { it.nodeId != senderNodeId }
-            .forEach { member ->
-                meshOutbox.enqueueGroupMessage(message, member.nodeId, groupId)
-            }
+            .map { it.nodeId }
+        meshOutbox.enqueueGroupMessage(message, recipientNodeIds, groupId)
 
         return message
     }
@@ -157,7 +156,7 @@ interface CryptoManagerPort {
 
 interface MeshOutboxPort {
     suspend fun enqueueMessage(message: MeshMessage, recipientNodeId: String)
-    suspend fun enqueueGroupMessage(message: MeshMessage, recipientNodeId: String, groupId: String)
+    suspend fun enqueueGroupMessage(message: MeshMessage, recipientNodeIds: List<String>, groupId: String)
 }
 
 interface TransportManagerPort {

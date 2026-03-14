@@ -63,7 +63,7 @@ class MeshOutbox @Inject constructor(
 
     override suspend fun enqueueGroupMessage(
         message: MeshMessage,
-        recipientNodeId: String,
+        recipientNodeIds: List<String>,
         groupId: String
     ) {
         val senderNodeId = message.senderNodeId
@@ -80,6 +80,7 @@ class MeshOutbox @Inject constructor(
         }
 
         try {
+            // Encrypt once with the sender key
             val packet = envelopeManager.encryptForGroup(
                 message = message,
                 senderNodeId = senderNodeId,
@@ -87,14 +88,16 @@ class MeshOutbox @Inject constructor(
                 groupSenderKey = senderKey,
                 signingPrivateKey = signingKey
             )
-            // Override destination to individual member for routing
-            val memberPacket = packet.copy(destinationNodeId = recipientNodeId)
-            val sent = routingEngine.sendPacket(memberPacket)
-            if (!sent) {
-                Timber.w("Group packet ${memberPacket.packetId.take(8)} queued for ${recipientNodeId.take(8)}")
+            // Send the same encrypted packet to each member, only changing the routing destination
+            for (recipientNodeId in recipientNodeIds) {
+                val memberPacket = packet.copy(destinationNodeId = recipientNodeId)
+                val sent = routingEngine.sendPacket(memberPacket)
+                if (!sent) {
+                    Timber.w("Group packet ${memberPacket.packetId.take(8)} queued for ${recipientNodeId.take(8)}")
+                }
             }
         } catch (e: Exception) {
-            Timber.e(e, "Failed to encrypt/send group message ${message.messageId.take(8)} to $recipientNodeId")
+            Timber.e(e, "Failed to encrypt/send group message ${message.messageId.take(8)}")
         }
     }
 }

@@ -6,7 +6,6 @@ import com.meshwalk.app.domain.model.DeliveryStatus
 import com.meshwalk.app.domain.model.MessageContent
 import com.meshwalk.app.domain.model.PacketType
 import com.meshwalk.app.domain.repository.ConversationRepository
-import com.meshwalk.app.domain.repository.GroupRepository
 import com.meshwalk.app.domain.repository.MessageRepository
 import com.meshwalk.app.mesh.group.GroupControlManager
 import com.meshwalk.app.routing.engine.MeshRoutingEngine
@@ -30,7 +29,6 @@ class MeshInbox @Inject constructor(
     private val envelopeManager: MessageEnvelopeManager,
     private val messageRepo: MessageRepository,
     private val conversationRepo: ConversationRepository,
-    private val groupRepo: GroupRepository,
     private val groupKeyManager: GroupKeyManager,
     private val groupControlManager: GroupControlManager
 ) {
@@ -100,20 +98,8 @@ class MeshInbox @Inject constructor(
         packet: com.meshwalk.app.domain.model.MeshPacket,
         ourNodeId: String
     ) {
-        // The packet's original destinationNodeId was overwritten to our nodeId for routing,
-        // but the encrypted AAD used the groupId. We need to find the group.
-        // The message's conversationId (inside encrypted payload) IS the groupId.
-        // Try decrypting with the sender's group key for each group we're in.
-
-        val groups = groupRepo.observeGroups().let {
-            // Get current groups synchronously
-            var result: List<com.meshwalk.app.domain.model.GroupInfo> = emptyList()
-            // We need to find which group this message belongs to
-            // Try using the sender's key for groups where we have their key
-            result
-        }
-
-        // Try to decrypt with each group's sender key for this sender
+        // The packet's destinationNodeId was overwritten to our nodeId for routing,
+        // but the AAD used the groupId. Find the right group by looking up the sender's key.
         val receivingKey = findGroupReceivingKey(packet.sourceNodeId)
         if (receivingKey == null) {
             Timber.w("No group sender key for ${packet.sourceNodeId.take(8)}, cannot decrypt group message")
