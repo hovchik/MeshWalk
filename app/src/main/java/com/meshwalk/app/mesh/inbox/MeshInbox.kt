@@ -15,6 +15,7 @@ import com.meshwalk.app.routing.engine.MeshRoutingEngine
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import timber.log.Timber
+import java.nio.ByteBuffer
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -134,16 +135,26 @@ class MeshInbox @Inject constructor(
         packet: com.meshwalk.app.domain.model.MeshPacket,
         ourNodeId: String
     ) {
-        // The packet's destinationNodeId was overwritten to our nodeId for routing,
-        // but the AAD used the groupId. Find the right group by looking up the sender's key.
-        val receivingKey = findGroupReceivingKey(packet.sourceNodeId)
-        if (receivingKey == null) {
-            Timber.w("No group sender key for ${packet.sourceNodeId.take(8)}, cannot decrypt group message")
+        // Extract the groupId prefix that was prepended by MeshOutbox.
+        // Format: [groupIdLen:4][groupId bytes][actual encrypted payload]
+        val groupIdAndPayload = extractGroupId(packet.encryptedPayload)
+        if (groupIdAndPayload == null) {
+            Timber.w("Failed to extract groupId from group message packet ${packet.packetId.take(8)}")
             return
         }
 
-        val (groupId, key) = receivingKey
-        val message = envelopeManager.decryptForGroup(packet, groupId, key)
+        val (groupId, actualPayload) = groupIdAndPayload
+
+        // Look up the sender's key for this specific group
+        val key = groupKeyManager.getReceivingKey(groupId, packet.sourceNodeId)
+        if (key == null) {
+            Timber.w("No group sender key for ${packet.sourceNodeId.take(8)} in group ${groupId.take(8)}")
+            return
+        }
+
+        // Decrypt using the actual payload (without the groupId prefix)
+        val decryptPacket = packet.copy(encryptedPayload = actualPayload)
+        val message = envelopeManager.decryptForGroup(decryptPacket, groupId, key)
         if (message == null) {
             Timber.w("Failed to decrypt group message from ${packet.sourceNodeId.take(8)}")
             return
@@ -168,9 +179,22 @@ class MeshInbox @Inject constructor(
         Timber.d("Received group message in ${groupId.take(8)} from ${packet.sourceNodeId.take(8)}")
     }
 
-    private fun findGroupReceivingKey(
-        senderNodeId: String
-    ): Pair<String, javax.crypto.SecretKey>? {
-        return groupKeyManager.findReceivingKeyForSender(senderNodeId)
+    /**
+     * Extract the groupId prefix from the wrapped payload.
+     * Returns (groupId, actualEncryptedPayload) or null on failure.
+     */
+    private fun extractGroupId(payload: ByteArray): Pair<String, ByteArray>? {
+        return try {
+            val buffer = ByteBuffer.wrap(payload)
+            val groupIdLen = buffer.getInt()
+            if (groupIdLen <= 0 || groupIdLen > buffer.remaining()) return null
+            val groupIdBytes = ByteArray(groupIdLen).also { buffer.get(it) }
+            val groupId = String(groupIdBytes, Charsets.UTF_8)
+            val actualPayload = ByteArray(buffer.remaining()).also { buffer.get(it) }
+            Pair(groupId, actualPayload)
+        } catch (e: Exception) {
+            Timber.e(e, "Error extracting groupId from payload")
+            null
+        }
     }
 }

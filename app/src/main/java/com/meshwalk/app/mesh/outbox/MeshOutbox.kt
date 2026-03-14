@@ -11,6 +11,8 @@ import com.meshwalk.app.domain.repository.PeerRepository
 import com.meshwalk.app.domain.usecase.MeshOutboxPort
 import com.meshwalk.app.routing.engine.MeshRoutingEngine
 import timber.log.Timber
+import java.nio.ByteBuffer
+import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -125,9 +127,25 @@ class MeshOutbox @Inject constructor(
                 groupSenderKey = senderKey,
                 signingPrivateKey = signingKey
             )
-            // Send the same encrypted packet to each member, only changing the routing destination
+
+            // Prepend groupId to the encrypted payload so the receiver can identify
+            // which group this message belongs to (the destinationNodeId will be
+            // overwritten with each recipient's nodeId for routing).
+            val groupIdBytes = groupId.toByteArray(Charsets.UTF_8)
+            val wrappedPayload = ByteBuffer.allocate(4 + groupIdBytes.size + packet.encryptedPayload.size)
+                .putInt(groupIdBytes.size)
+                .put(groupIdBytes)
+                .put(packet.encryptedPayload)
+                .array()
+
+            // Send to each member with a unique packetId (to avoid deduplication)
+            // and the wrapped payload containing the groupId prefix.
             for (recipientNodeId in recipientNodeIds) {
-                val memberPacket = packet.copy(destinationNodeId = recipientNodeId)
+                val memberPacket = packet.copy(
+                    packetId = UUID.randomUUID().toString(),
+                    destinationNodeId = recipientNodeId,
+                    encryptedPayload = wrappedPayload
+                )
                 val sent = routingEngine.sendPacket(memberPacket)
                 if (!sent) {
                     Timber.w("Group packet ${memberPacket.packetId.take(8)} queued for ${recipientNodeId.take(8)}")

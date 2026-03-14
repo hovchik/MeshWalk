@@ -95,10 +95,18 @@ class GroupKeyManager @Inject constructor(
 
     /**
      * Get the sender key for decrypting a group message from another member.
+     * Also advances the chain so the next message can be decrypted correctly.
      */
     fun getReceivingKey(groupId: String, senderNodeId: String): SecretKey? {
         val state = groupSenderKeys[groupId]?.get(senderNodeId) ?: return null
-        return deriveMessageKey(state.chainKey, state.iteration)
+        val messageKey = deriveMessageKey(state.chainKey, state.iteration)
+        // Advance the receiver's chain to stay in sync with the sender
+        val newChainKey = advanceChain(state.chainKey)
+        groupSenderKeys[groupId]!![senderNodeId] = state.copy(
+            chainKey = newChainKey,
+            iteration = state.iteration + 1
+        )
+        return messageKey
     }
 
     /**
