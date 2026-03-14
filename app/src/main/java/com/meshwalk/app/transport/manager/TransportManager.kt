@@ -224,7 +224,7 @@ class TransportManager @Inject constructor(
                 event.nodeId?.let { nodeId ->
                     // For incoming connections, EndpointDiscovered may not have fired,
                     // so ensure the endpoint mapping exists before sending the advertisement.
-                    if (nodeId !in nodeEndpointMap) {
+                    if (!nodeEndpointMap.containsKey(nodeId)) {
                         nodeEndpointMap[nodeId] = event.endpointId
                         endpointTransportMap[event.endpointId] = nearbyTransport
                     }
