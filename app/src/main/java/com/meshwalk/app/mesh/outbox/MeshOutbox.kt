@@ -123,6 +123,26 @@ class MeshOutbox @Inject constructor(
         Timber.d("Auto-established session with ${peerNodeId.take(8)} before sending")
     }
 
+    /**
+     * Wait for the group sender key to become available.
+     * The key is generated locally during group creation/acceptance, but
+     * the key distribution control messages may still be in flight.
+     */
+    private suspend fun ensureGroupSenderKey(
+        groupId: String,
+        senderNodeId: String
+    ): javax.crypto.SecretKey? {
+        var key = groupKeyManager.getSendingKey(groupId, senderNodeId)
+        if (key != null) return key
+
+        val deadline = System.currentTimeMillis() + KEY_EXCHANGE_TIMEOUT_MS
+        while (key == null && System.currentTimeMillis() < deadline) {
+            delay(KEY_EXCHANGE_POLL_INTERVAL_MS)
+            key = groupKeyManager.getSendingKey(groupId, senderNodeId)
+        }
+        return key
+    }
+
     override suspend fun enqueueGroupMessage(
         message: MeshMessage,
         recipientNodeIds: List<String>,
@@ -136,7 +156,9 @@ class MeshOutbox @Inject constructor(
             throw IllegalStateException("Signing key not found. Please re-create your identity.")
         }
 
-        val senderKey = groupKeyManager.getSendingKey(groupId, senderNodeId)
+        // Wait for the sender key to become available — it may still be
+        // propagating through group control messages after joining.
+        val senderKey = ensureGroupSenderKey(groupId, senderNodeId)
         if (senderKey == null) {
             Timber.e("Cannot send group message: sender key not found for group $groupId")
             messageRepo.updateDeliveryStatus(message.messageId, DeliveryStatus.FAILED)

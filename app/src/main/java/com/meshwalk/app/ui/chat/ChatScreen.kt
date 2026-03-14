@@ -1,9 +1,13 @@
 package com.meshwalk.app.ui.chat
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -16,7 +20,11 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
@@ -214,10 +222,12 @@ fun ChatScreen(
     viewModel: ChatViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsState()
-    var messageText by remember { mutableStateOf("") }
+    var messageText by remember { mutableStateOf(TextFieldValue("")) }
     var showGroupSettings by remember { mutableStateOf(false) }
+    var showEmojiPicker by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
     val snackbarHostState = remember { SnackbarHostState() }
+    val keyboardController = LocalSoftwareKeyboardController.current
 
     // Auto-scroll to bottom on new messages
     LaunchedEffect(state.messages.size) {
@@ -309,29 +319,57 @@ fun ChatScreen(
                 tonalElevation = 3.dp,
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Row(
-                    modifier = Modifier
-                        .padding(horizontal = 8.dp, vertical = 8.dp)
-                        .imePadding(),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    OutlinedTextField(
-                        value = messageText,
-                        onValueChange = { messageText = it },
-                        modifier = Modifier.weight(1f),
-                        placeholder = { Text("Type a message...") },
-                        maxLines = 4,
-                        shape = RoundedCornerShape(24.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    FilledIconButton(
-                        onClick = {
-                            viewModel.send(messageText)
-                            messageText = ""
-                        },
-                        enabled = messageText.isNotBlank()
+                Column(modifier = Modifier.imePadding()) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(Icons.AutoMirrored.Filled.Send, "Send")
+                        IconButton(onClick = {
+                            showEmojiPicker = !showEmojiPicker
+                            if (showEmojiPicker) keyboardController?.hide()
+                        }) {
+                            Icon(
+                                Icons.Filled.EmojiEmotions,
+                                contentDescription = "Emoji",
+                                tint = if (showEmojiPicker) MaterialTheme.colorScheme.primary
+                                       else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        OutlinedTextField(
+                            value = messageText,
+                            onValueChange = {
+                                messageText = it
+                                if (showEmojiPicker) showEmojiPicker = false
+                            },
+                            modifier = Modifier.weight(1f),
+                            placeholder = { Text("Type a message...") },
+                            maxLines = 4,
+                            shape = RoundedCornerShape(24.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        FilledIconButton(
+                            onClick = {
+                                viewModel.send(messageText.text)
+                                messageText = TextFieldValue("")
+                                showEmojiPicker = false
+                            },
+                            enabled = messageText.text.isNotBlank()
+                        ) {
+                            Icon(Icons.AutoMirrored.Filled.Send, "Send")
+                        }
+                    }
+                    AnimatedVisibility(visible = showEmojiPicker) {
+                        EmojiPickerGrid(onEmojiSelected = { emoji ->
+                            val current = messageText
+                            val before = current.text.substring(0, current.selection.start)
+                            val after = current.text.substring(current.selection.end)
+                            val newText = before + emoji + after
+                            val newCursor = before.length + emoji.length
+                            messageText = TextFieldValue(
+                                text = newText,
+                                selection = TextRange(newCursor)
+                            )
+                        })
                     }
                 }
             }
@@ -466,6 +504,58 @@ private fun GroupSettingsDialog(
             TextButton(onClick = onDismiss) { Text("Done") }
         }
     )
+}
+
+private val EMOJI_LIST = listOf(
+    // Smileys
+    "\uD83D\uDE00", "\uD83D\uDE03", "\uD83D\uDE04", "\uD83D\uDE01", "\uD83D\uDE06",
+    "\uD83D\uDE05", "\uD83D\uDE02", "\uD83E\uDD23", "\uD83D\uDE0A", "\uD83D\uDE07",
+    "\uD83D\uDE42", "\uD83D\uDE43", "\uD83D\uDE09", "\uD83D\uDE0C", "\uD83D\uDE0D",
+    "\uD83E\uDD70", "\uD83D\uDE18", "\uD83D\uDE17", "\uD83D\uDE1A", "\uD83D\uDE19",
+    "\uD83D\uDE0B", "\uD83D\uDE1B", "\uD83D\uDE1D", "\uD83D\uDE1C", "\uD83E\uDD2A",
+    "\uD83E\uDD28", "\uD83E\uDDD0", "\uD83E\uDD13", "\uD83D\uDE0E", "\uD83E\uDD29",
+    // Gestures
+    "\uD83D\uDC4D", "\uD83D\uDC4E", "\uD83D\uDC4B", "\uD83D\uDC4F", "\uD83D\uDE4F",
+    "\uD83D\uDC4C", "\u270C\uFE0F", "\uD83E\uDD1E", "\uD83E\uDD1F", "\uD83E\uDD18",
+    // Hearts
+    "\u2764\uFE0F", "\uD83E\uDDE1", "\uD83D\uDC9B", "\uD83D\uDC9A", "\uD83D\uDC99",
+    "\uD83D\uDC9C", "\uD83D\uDDA4", "\uD83D\uDC94", "\u2763\uFE0F", "\uD83D\uDC95",
+    // Faces
+    "\uD83D\uDE14", "\uD83D\uDE1E", "\uD83D\uDE22", "\uD83D\uDE2D", "\uD83D\uDE29",
+    "\uD83D\uDE21", "\uD83E\uDD2C", "\uD83D\uDE31", "\uD83D\uDE28", "\uD83D\uDE30",
+    "\uD83E\uDD14", "\uD83E\uDD2F", "\uD83D\uDE34", "\uD83E\uDD75", "\uD83E\uDD76",
+    "\uD83D\uDE2E", "\uD83D\uDE32", "\uD83E\uDD2D", "\uD83E\uDD2B", "\uD83E\uDD25",
+    // Objects
+    "\uD83D\uDD25", "\uD83C\uDF1F", "\u2728", "\uD83C\uDF08", "\u2600\uFE0F",
+    "\uD83C\uDF19", "\uD83C\uDF1A", "\u26A1", "\uD83D\uDCA5", "\uD83C\uDF89"
+)
+
+@Composable
+private fun EmojiPickerGrid(onEmojiSelected: (String) -> Unit) {
+    Surface(
+        tonalElevation = 2.dp,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        LazyVerticalGrid(
+            columns = GridCells.Fixed(8),
+            modifier = Modifier
+                .height(200.dp)
+                .padding(horizontal = 4.dp, vertical = 4.dp),
+            contentPadding = PaddingValues(4.dp)
+        ) {
+            items(EMOJI_LIST) { emoji ->
+                Box(
+                    modifier = Modifier
+                        .aspectRatio(1f)
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable { onEmojiSelected(emoji) },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(text = emoji, fontSize = 24.sp)
+                }
+            }
+        }
+    }
 }
 
 @Composable
