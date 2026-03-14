@@ -276,36 +276,73 @@ class GroupControlManager @Inject constructor(
 
     private suspend fun handleAccept(packet: MeshPacket) {
         val parsed = deserializePayload(packet.encryptedPayload) ?: return
+        val acceptorNodeId = packet.sourceNodeId
+        val ourNodeId = packet.destinationNodeId
 
         if (parsed.senderKey != null) {
-            groupKeyManager.storeSenderKey(parsed.groupId, packet.sourceNodeId, parsed.senderKey)
+            groupKeyManager.storeSenderKey(parsed.groupId, acceptorNodeId, parsed.senderKey)
         }
 
         // Send our sender key back to the acceptor
-        val ourNodeId = packet.destinationNodeId
-        val senderKeyBytes = groupKeyManager.serializeSenderKey(parsed.groupId, ourNodeId)
-        if (senderKeyBytes != null) {
-            val keyPayload = serializePayload(
-                action = ACTION_KEY_DISTRIBUTION,
-                groupId = parsed.groupId,
-                groupName = parsed.groupName,
-                senderName = null,
-                groupType = parsed.groupType,
-                senderKey = senderKeyBytes
-            )
-            val keyPacket = MeshPacket(
-                sourceNodeId = ourNodeId,
-                destinationNodeId = packet.sourceNodeId,
-                packetType = PacketType.GROUP_CONTROL,
-                encryptedPayload = keyPayload,
-                nonce = ByteArray(12),
-                senderSignature = ByteArray(0),
-                flags = 0
-            )
-            routingEngine.sendPacket(keyPacket)
+        val ourSenderKeyBytes = groupKeyManager.serializeSenderKey(parsed.groupId, ourNodeId)
+        if (ourSenderKeyBytes != null) {
+            sendKeyDistribution(parsed, ourNodeId, acceptorNodeId, ourSenderKeyBytes)
         }
 
-        Timber.d("${packet.sourceNodeId.take(8)} accepted invite for group ${parsed.groupId.take(8)}")
+        // Distribute keys between the new member and all other existing members
+        // so that every member can decrypt messages from every other member.
+        val group = groupRepo.getGroup(parsed.groupId)
+        if (group != null) {
+            val otherMembers = group.members.filter {
+                it.nodeId != ourNodeId && it.nodeId != acceptorNodeId
+            }
+
+            for (member in otherMembers) {
+                // Forward the new acceptor's sender key to each existing member
+                if (parsed.senderKey != null) {
+                    sendKeyDistribution(parsed, acceptorNodeId, member.nodeId, parsed.senderKey)
+                }
+
+                // Forward each existing member's sender key to the new acceptor
+                val memberKeyBytes = groupKeyManager.serializeSenderKey(parsed.groupId, member.nodeId)
+                if (memberKeyBytes != null) {
+                    sendKeyDistribution(parsed, member.nodeId, acceptorNodeId, memberKeyBytes)
+                }
+            }
+        }
+
+        Timber.d("${acceptorNodeId.take(8)} accepted invite for group ${parsed.groupId.take(8)}")
+    }
+
+    /**
+     * Send a KEY_DISTRIBUTION packet to distribute a member's sender key to a recipient.
+     * The sourceNodeId in the packet is set to [keyOwnerNodeId] so the recipient knows
+     * whose sender key it is.
+     */
+    private suspend fun sendKeyDistribution(
+        parsed: ParsedPayload,
+        keyOwnerNodeId: String,
+        recipientNodeId: String,
+        senderKeyBytes: ByteArray
+    ) {
+        val keyPayload = serializePayload(
+            action = ACTION_KEY_DISTRIBUTION,
+            groupId = parsed.groupId,
+            groupName = parsed.groupName,
+            senderName = null,
+            groupType = parsed.groupType,
+            senderKey = senderKeyBytes
+        )
+        val keyPacket = MeshPacket(
+            sourceNodeId = keyOwnerNodeId,
+            destinationNodeId = recipientNodeId,
+            packetType = PacketType.GROUP_CONTROL,
+            encryptedPayload = keyPayload,
+            nonce = ByteArray(12),
+            senderSignature = ByteArray(0),
+            flags = 0
+        )
+        routingEngine.sendPacket(keyPacket)
     }
 
     private fun handleReject(packet: MeshPacket) {
