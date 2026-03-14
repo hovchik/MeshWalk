@@ -16,12 +16,8 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Manages group control packets: invitations, acceptance, key distribution.
- *
- * GROUP_CONTROL packet payload format:
- * [actionByte][groupIdLen][groupId][groupNameLen][groupName][senderNameLen][senderName]
- * [groupTypeByte][memberCount (4 bytes)]
- * Optional for KEY_DISTRIBUTION: [senderKeyLen][senderKeyBytes]
+ * Manages group control packets: invitations, acceptance, key distribution,
+ * and member management.
  */
 @Singleton
 class GroupControlManager @Inject constructor(
@@ -36,6 +32,7 @@ class GroupControlManager @Inject constructor(
         const val ACTION_ACCEPT: Byte = 0x02
         const val ACTION_REJECT: Byte = 0x03
         const val ACTION_KEY_DISTRIBUTION: Byte = 0x04
+        const val ACTION_MEMBER_ADDED: Byte = 0x05
     }
 
     private val _pendingInvitations = MutableStateFlow<List<GroupInvitation>>(emptyList())
@@ -43,26 +40,22 @@ class GroupControlManager @Inject constructor(
 
     /**
      * Send group invitations to all members after group creation.
-     * Also generates our sender key and distributes it.
+     * Includes the full member list so invitees see all members.
      */
     suspend fun sendInvitations(group: GroupInfo, ourNodeId: String) {
-        // Generate our sender key for this group
         groupKeyManager.generateSenderKey(group.groupId, ourNodeId)
 
-        val signingKey = keyStorage.getSigningPrivateKey(ourNodeId) ?: run {
-            Timber.e("No signing key for $ourNodeId, cannot send invitations")
-            return
-        }
-
         val members = group.members.filter { it.nodeId != ourNodeId }
+        val memberNodeIds = group.members.map { it.nodeId }
+
         for (member in members) {
-            val payload = serializeInvitePayload(
+            val payload = serializePayload(
                 action = ACTION_INVITE,
                 groupId = group.groupId,
                 groupName = group.name,
                 senderName = group.members.find { it.nodeId == ourNodeId }?.displayName,
                 groupType = group.groupType,
-                memberCount = group.members.size
+                memberNodeIds = memberNodeIds
             )
 
             val packet = MeshPacket(
@@ -91,51 +84,51 @@ class GroupControlManager @Inject constructor(
             ACTION_ACCEPT -> handleAccept(packet)
             ACTION_REJECT -> handleReject(packet)
             ACTION_KEY_DISTRIBUTION -> handleKeyDistribution(packet)
+            ACTION_MEMBER_ADDED -> handleMemberAdded(packet)
             else -> Timber.w("Unknown group control action: ${payload[0]}")
         }
     }
 
     private fun handleInvite(packet: MeshPacket) {
-        val parsed = deserializeInvitePayload(packet.encryptedPayload) ?: return
+        val parsed = deserializePayload(packet.encryptedPayload) ?: return
         val invitation = GroupInvitation(
             groupId = parsed.groupId,
             groupName = parsed.groupName,
             inviterNodeId = packet.sourceNodeId,
             inviterName = parsed.senderName,
             groupType = parsed.groupType,
-            memberCount = parsed.memberCount
+            memberCount = parsed.memberNodeIds.size,
+            memberNodeIds = parsed.memberNodeIds
         )
 
         val current = _pendingInvitations.value.toMutableList()
-        // Replace existing invite for same group
         current.removeAll { it.groupId == invitation.groupId }
         current.add(invitation)
         _pendingInvitations.value = current
 
-        Timber.d("Received group invite: ${invitation.groupName} from ${packet.sourceNodeId.take(8)}")
+        Timber.d("Received group invite: ${invitation.groupName} from ${packet.sourceNodeId.take(8)} (${invitation.memberCount} members)")
     }
 
     /**
-     * Accept a pending invitation. Creates the group locally and notifies the inviter.
+     * Accept a pending invitation. Creates the group locally with all members.
      */
     suspend fun acceptInvitation(invitation: GroupInvitation, ourNodeId: String, ourName: String?) {
-        // Create group locally
+        // Build the full member list from the invitation
+        val members = invitation.memberNodeIds.map { nodeId ->
+            GroupMember(
+                nodeId = nodeId,
+                displayName = if (nodeId == invitation.inviterNodeId) invitation.inviterName
+                              else if (nodeId == ourNodeId) ourName
+                              else null,
+                role = if (nodeId == invitation.inviterNodeId) GroupRole.ADMIN else GroupRole.MEMBER
+            )
+        }
+
         val group = GroupInfo(
             groupId = invitation.groupId,
             name = invitation.groupName,
             creatorNodeId = invitation.inviterNodeId,
-            members = listOf(
-                GroupMember(
-                    nodeId = invitation.inviterNodeId,
-                    displayName = invitation.inviterName,
-                    role = GroupRole.ADMIN
-                ),
-                GroupMember(
-                    nodeId = ourNodeId,
-                    displayName = ourName,
-                    role = GroupRole.MEMBER
-                )
-            ),
+            members = members,
             groupType = invitation.groupType
         )
         groupRepo.createGroup(group)
@@ -144,7 +137,7 @@ class GroupControlManager @Inject constructor(
                 conversationId = group.groupId,
                 type = group.groupType,
                 title = group.name,
-                participants = group.members.map { it.nodeId }
+                participants = members.map { it.nodeId }
             )
         )
 
@@ -153,13 +146,12 @@ class GroupControlManager @Inject constructor(
 
         // Send accept + our sender key to inviter
         val senderKeyBytes = groupKeyManager.serializeSenderKey(invitation.groupId, ourNodeId)
-        val payload = serializeInvitePayload(
+        val payload = serializePayload(
             action = ACTION_ACCEPT,
             groupId = invitation.groupId,
             groupName = invitation.groupName,
             senderName = ourName,
             groupType = invitation.groupType,
-            memberCount = 0,
             senderKey = senderKeyBytes
         )
 
@@ -174,23 +166,21 @@ class GroupControlManager @Inject constructor(
         )
         routingEngine.sendPacket(packet)
 
-        // Remove from pending
         _pendingInvitations.value = _pendingInvitations.value.filter { it.groupId != invitation.groupId }
 
         Timber.d("Accepted group invite: ${invitation.groupName}")
     }
 
     /**
-     * Reject a pending invitation. Notifies the inviter.
+     * Reject a pending invitation.
      */
     suspend fun rejectInvitation(invitation: GroupInvitation, ourNodeId: String) {
-        val payload = serializeInvitePayload(
+        val payload = serializePayload(
             action = ACTION_REJECT,
             groupId = invitation.groupId,
             groupName = invitation.groupName,
             senderName = null,
-            groupType = invitation.groupType,
-            memberCount = 0
+            groupType = invitation.groupType
         )
 
         val packet = MeshPacket(
@@ -209,25 +199,98 @@ class GroupControlManager @Inject constructor(
         Timber.d("Rejected group invite: ${invitation.groupName}")
     }
 
-    private suspend fun handleAccept(packet: MeshPacket) {
-        val parsed = deserializeInvitePayload(packet.encryptedPayload) ?: return
+    /**
+     * Add a new member to an existing group. Sends invite to the new member
+     * and notifies all existing members.
+     */
+    suspend fun addMemberToGroup(groupId: String, newMemberNodeId: String, ourNodeId: String) {
+        val group = groupRepo.getGroup(groupId) ?: return
 
-        // Store their sender key if provided
+        if (group.members.any { it.nodeId == newMemberNodeId }) {
+            Timber.d("${newMemberNodeId.take(8)} is already a member of group $groupId")
+            return
+        }
+
+        val newMember = GroupMember(
+            nodeId = newMemberNodeId,
+            displayName = null,
+            role = GroupRole.MEMBER
+        )
+        val updatedMembers = group.members + newMember
+        val updatedGroup = group.copy(members = updatedMembers, version = group.version + 1)
+        groupRepo.updateGroup(updatedGroup)
+
+        // Send invite to the new member with full member list
+        val memberNodeIds = updatedMembers.map { it.nodeId }
+        val invitePayload = serializePayload(
+            action = ACTION_INVITE,
+            groupId = groupId,
+            groupName = group.name,
+            senderName = group.members.find { it.nodeId == ourNodeId }?.displayName,
+            groupType = group.groupType,
+            memberNodeIds = memberNodeIds
+        )
+        val invitePacket = MeshPacket(
+            sourceNodeId = ourNodeId,
+            destinationNodeId = newMemberNodeId,
+            packetType = PacketType.GROUP_CONTROL,
+            encryptedPayload = invitePayload,
+            nonce = ByteArray(12),
+            senderSignature = ByteArray(0),
+            flags = MeshPacket.FLAG_ACK_REQUESTED
+        )
+        routingEngine.sendPacket(invitePacket)
+
+        // Notify existing members about the new member
+        val notifyPayload = serializePayload(
+            action = ACTION_MEMBER_ADDED,
+            groupId = groupId,
+            groupName = group.name,
+            senderName = null,
+            groupType = group.groupType,
+            memberNodeIds = listOf(newMemberNodeId)
+        )
+        for (member in group.members.filter { it.nodeId != ourNodeId }) {
+            val notifyPacket = MeshPacket(
+                sourceNodeId = ourNodeId,
+                destinationNodeId = member.nodeId,
+                packetType = PacketType.GROUP_CONTROL,
+                encryptedPayload = notifyPayload,
+                nonce = ByteArray(12),
+                senderSignature = ByteArray(0),
+                flags = 0
+            )
+            routingEngine.sendPacket(notifyPacket)
+        }
+
+        Timber.d("Added ${newMemberNodeId.take(8)} to group ${group.name}")
+    }
+
+    /**
+     * Update group name.
+     */
+    suspend fun updateGroupName(groupId: String, newName: String) {
+        val group = groupRepo.getGroup(groupId) ?: return
+        groupRepo.updateGroup(group.copy(name = newName))
+    }
+
+    private suspend fun handleAccept(packet: MeshPacket) {
+        val parsed = deserializePayload(packet.encryptedPayload) ?: return
+
         if (parsed.senderKey != null) {
             groupKeyManager.storeSenderKey(parsed.groupId, packet.sourceNodeId, parsed.senderKey)
         }
 
         // Send our sender key back to the acceptor
-        val ourNodeId = packet.destinationNodeId // This packet was sent TO us
+        val ourNodeId = packet.destinationNodeId
         val senderKeyBytes = groupKeyManager.serializeSenderKey(parsed.groupId, ourNodeId)
         if (senderKeyBytes != null) {
-            val keyPayload = serializeInvitePayload(
+            val keyPayload = serializePayload(
                 action = ACTION_KEY_DISTRIBUTION,
                 groupId = parsed.groupId,
                 groupName = parsed.groupName,
                 senderName = null,
                 groupType = parsed.groupType,
-                memberCount = 0,
                 senderKey = senderKeyBytes
             )
             val keyPacket = MeshPacket(
@@ -246,15 +309,32 @@ class GroupControlManager @Inject constructor(
     }
 
     private fun handleReject(packet: MeshPacket) {
-        val parsed = deserializeInvitePayload(packet.encryptedPayload) ?: return
+        val parsed = deserializePayload(packet.encryptedPayload) ?: return
         Timber.d("${packet.sourceNodeId.take(8)} rejected invite for group ${parsed.groupId.take(8)}")
     }
 
     private fun handleKeyDistribution(packet: MeshPacket) {
-        val parsed = deserializeInvitePayload(packet.encryptedPayload) ?: return
+        val parsed = deserializePayload(packet.encryptedPayload) ?: return
         if (parsed.senderKey != null) {
             groupKeyManager.storeSenderKey(parsed.groupId, packet.sourceNodeId, parsed.senderKey)
             Timber.d("Received sender key from ${packet.sourceNodeId.take(8)} for group ${parsed.groupId.take(8)}")
+        }
+    }
+
+    private suspend fun handleMemberAdded(packet: MeshPacket) {
+        val parsed = deserializePayload(packet.encryptedPayload) ?: return
+        val group = groupRepo.getGroup(parsed.groupId) ?: return
+
+        for (newNodeId in parsed.memberNodeIds) {
+            if (group.members.none { it.nodeId == newNodeId }) {
+                val newMember = GroupMember(
+                    nodeId = newNodeId,
+                    displayName = null,
+                    role = GroupRole.MEMBER
+                )
+                groupRepo.addMember(parsed.groupId, newMember)
+                Timber.d("Added ${newNodeId.take(8)} to group ${parsed.groupId.take(8)} (notified by ${packet.sourceNodeId.take(8)})")
+            }
         }
     }
 
@@ -265,41 +345,53 @@ class GroupControlManager @Inject constructor(
         val groupName: String,
         val senderName: String?,
         val groupType: ConversationType,
-        val memberCount: Int,
+        val memberNodeIds: List<String> = emptyList(),
         val senderKey: ByteArray? = null
     )
 
-    private fun serializeInvitePayload(
+    /**
+     * Payload format:
+     * [action:1][groupIdLen:4][groupId][groupNameLen:4][groupName]
+     * [senderNameLen:4][senderName][groupType:1]
+     * [memberCount:4][memberNodeId1Len:4][memberNodeId1]...[memberNodeIdNLen:4][memberNodeIdN]
+     * [senderKeyLen:4][senderKey]
+     */
+    private fun serializePayload(
         action: Byte,
         groupId: String,
         groupName: String,
         senderName: String?,
         groupType: ConversationType,
-        memberCount: Int,
+        memberNodeIds: List<String> = emptyList(),
         senderKey: ByteArray? = null
     ): ByteArray {
         val gidBytes = groupId.toByteArray(StandardCharsets.UTF_8)
         val gnameBytes = groupName.toByteArray(StandardCharsets.UTF_8)
         val snameBytes = (senderName ?: "").toByteArray(StandardCharsets.UTF_8)
         val keyBytes = senderKey ?: ByteArray(0)
+        val memberBytesList = memberNodeIds.map { it.toByteArray(StandardCharsets.UTF_8) }
 
+        val memberSize = 4 + memberBytesList.sumOf { 4 + it.size } // count + each member
         val size = 1 + (4 + gidBytes.size) + (4 + gnameBytes.size) + (4 + snameBytes.size) +
-                1 + 4 + (4 + keyBytes.size)
+                1 + memberSize + (4 + keyBytes.size)
         val buffer = ByteBuffer.allocate(size)
         buffer.put(action)
         buffer.putInt(gidBytes.size).put(gidBytes)
         buffer.putInt(gnameBytes.size).put(gnameBytes)
         buffer.putInt(snameBytes.size).put(snameBytes)
         buffer.put(groupType.ordinal.toByte())
-        buffer.putInt(memberCount)
+        buffer.putInt(memberBytesList.size)
+        for (mBytes in memberBytesList) {
+            buffer.putInt(mBytes.size).put(mBytes)
+        }
         buffer.putInt(keyBytes.size).put(keyBytes)
         return buffer.array()
     }
 
-    private fun deserializeInvitePayload(data: ByteArray): ParsedPayload? {
+    private fun deserializePayload(data: ByteArray): ParsedPayload? {
         return try {
             val buffer = ByteBuffer.wrap(data)
-            buffer.get() // skip action byte (already read)
+            buffer.get() // skip action byte
 
             fun readString(): String {
                 val len = buffer.getInt()
@@ -311,12 +403,14 @@ class GroupControlManager @Inject constructor(
             val groupName = readString()
             val senderName = readString().takeIf { it.isNotEmpty() }
             val groupType = ConversationType.entries[buffer.get().toInt()]
+
             val memberCount = buffer.getInt()
+            val memberNodeIds = (0 until memberCount).map { readString() }
 
             val keyLen = if (buffer.remaining() >= 4) buffer.getInt() else 0
             val senderKey = if (keyLen > 0) ByteArray(keyLen).also { buffer.get(it) } else null
 
-            ParsedPayload(groupId, groupName, senderName, groupType, memberCount, senderKey)
+            ParsedPayload(groupId, groupName, senderName, groupType, memberNodeIds, senderKey)
         } catch (e: Exception) {
             Timber.e(e, "Failed to deserialize group control payload")
             null

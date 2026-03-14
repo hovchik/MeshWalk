@@ -102,15 +102,22 @@ class SessionManager @Inject constructor(
         // ECDH key agreement
         val sharedSecret = keyManager.performKeyAgreement(ourPrivate, peerPublic)
 
-        // Derive session keys via HKDF
-        val sendingKey = keyManager.deriveSessionKey(
+        // Derive session keys via HKDF using canonical (sorted) node ordering
+        // so both sides derive the same key pair regardless of who initiates.
+        val (first, second) = if (ourNodeId < peerNodeId) ourNodeId to peerNodeId
+                              else peerNodeId to ourNodeId
+        val keyA = keyManager.deriveSessionKey(
             sharedSecret,
-            "meshwalk-send-$ourNodeId-$peerNodeId".toByteArray()
+            "meshwalk-key-a-$first-$second".toByteArray()
         )
-        val receivingKey = keyManager.deriveSessionKey(
+        val keyB = keyManager.deriveSessionKey(
             sharedSecret,
-            "meshwalk-recv-$ourNodeId-$peerNodeId".toByteArray()
+            "meshwalk-key-b-$first-$second".toByteArray()
         )
+        // The node that sorts first uses keyA for sending and keyB for receiving.
+        // The other node uses keyB for sending and keyA for receiving.
+        val sendingKey = if (ourNodeId == first) keyA else keyB
+        val receivingKey = if (ourNodeId == first) keyB else keyA
 
         val session = MeshSession(
             sessionId = sessionId,

@@ -2,11 +2,14 @@ package com.meshwalk.app.mesh.inbox
 
 import com.meshwalk.app.crypto.envelope.MessageEnvelopeManager
 import com.meshwalk.app.crypto.group.GroupKeyManager
+import com.meshwalk.app.crypto.keys.KeyStorage
+import com.meshwalk.app.crypto.session.SessionManager
 import com.meshwalk.app.domain.model.DeliveryStatus
 import com.meshwalk.app.domain.model.MessageContent
 import com.meshwalk.app.domain.model.PacketType
 import com.meshwalk.app.domain.repository.ConversationRepository
 import com.meshwalk.app.domain.repository.MessageRepository
+import com.meshwalk.app.domain.repository.PeerRepository
 import com.meshwalk.app.mesh.group.GroupControlManager
 import com.meshwalk.app.routing.engine.MeshRoutingEngine
 import kotlinx.coroutines.CoroutineScope
@@ -30,7 +33,10 @@ class MeshInbox @Inject constructor(
     private val messageRepo: MessageRepository,
     private val conversationRepo: ConversationRepository,
     private val groupKeyManager: GroupKeyManager,
-    private val groupControlManager: GroupControlManager
+    private val groupControlManager: GroupControlManager,
+    private val sessionManager: SessionManager,
+    private val keyStorage: KeyStorage,
+    private val peerRepo: PeerRepository
 ) {
 
     fun start(ourNodeId: String, scope: CoroutineScope) {
@@ -64,6 +70,9 @@ class MeshInbox @Inject constructor(
         packet: com.meshwalk.app.domain.model.MeshPacket,
         ourNodeId: String
     ) {
+        // Ensure we have a session with the sender before decrypting
+        ensureSession(ourNodeId, packet.sourceNodeId)
+
         val message = envelopeManager.decryptFromPeer(packet, ourNodeId)
         if (message == null) {
             Timber.w("Failed to decrypt direct message from ${packet.sourceNodeId}")
@@ -94,6 +103,33 @@ class MeshInbox @Inject constructor(
         Timber.d("Received direct message from ${packet.sourceNodeId.take(8)}: ${preview.take(30)}")
     }
 
+    /**
+     * Ensure a pairwise session exists with the peer (needed for decryption).
+     * Mirror of MeshOutbox.ensureSession().
+     */
+    private suspend fun ensureSession(ourNodeId: String, peerNodeId: String) {
+        if (sessionManager.hasSession(ourNodeId, peerNodeId)) return
+
+        val ourExchangeKey = keyStorage.getExchangePrivateKey(ourNodeId) ?: run {
+            Timber.w("No exchange private key for $ourNodeId, cannot establish session")
+            return
+        }
+
+        val peer = peerRepo.getPeer(peerNodeId)
+        val peerExchangeKey = peer?.publicExchangeKey ?: run {
+            Timber.w("No exchange public key for ${peerNodeId.take(8)}, cannot establish session")
+            return
+        }
+
+        sessionManager.establishSessionWithKeys(
+            ourNodeId = ourNodeId,
+            peerNodeId = peerNodeId,
+            ourExchangePrivateKey = ourExchangeKey,
+            peerPublicExchangeKey = peerExchangeKey
+        )
+        Timber.d("Auto-established session with ${peerNodeId.take(8)} for receiving")
+    }
+
     private suspend fun handleGroupMessage(
         packet: com.meshwalk.app.domain.model.MeshPacket,
         ourNodeId: String
@@ -113,7 +149,6 @@ class MeshInbox @Inject constructor(
             return
         }
 
-        // The conversationId in the decrypted message should be the groupId
         val localMessage = message.copy(deliveryStatus = DeliveryStatus.DELIVERED)
 
         if (messageRepo.getMessageById(localMessage.messageId) != null) {
@@ -133,15 +168,9 @@ class MeshInbox @Inject constructor(
         Timber.d("Received group message in ${groupId.take(8)} from ${packet.sourceNodeId.take(8)}")
     }
 
-    /**
-     * Find a group receiving key for a given sender across all our groups.
-     */
     private fun findGroupReceivingKey(
         senderNodeId: String
     ): Pair<String, javax.crypto.SecretKey>? {
-        // GroupKeyManager stores keys by groupId → senderNodeId
-        // We need to iterate groups where we have this sender's key
-        // The GroupKeyManager uses in-memory ConcurrentHashMap, so we can check directly
         return groupKeyManager.findReceivingKeyForSender(senderNodeId)
     }
 }

@@ -24,6 +24,7 @@ import com.meshwalk.app.domain.model.*
 import com.meshwalk.app.domain.repository.*
 import com.meshwalk.app.domain.usecase.SendGroupMessageUseCase
 import com.meshwalk.app.domain.usecase.SendMessageUseCase
+import com.meshwalk.app.mesh.group.GroupControlManager
 import com.meshwalk.app.util.TimeUtils
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
@@ -40,7 +41,8 @@ class ChatViewModel @Inject constructor(
     private val settingsRepo: SettingsRepository,
     private val groupRepo: GroupRepository,
     private val sendMessage: SendMessageUseCase,
-    private val sendGroupMessage: SendGroupMessageUseCase
+    private val sendGroupMessage: SendGroupMessageUseCase,
+    private val groupControlManager: GroupControlManager
 ) : ViewModel() {
 
     private val conversationId: String = savedStateHandle["conversationId"] ?: ""
@@ -57,7 +59,9 @@ class ChatViewModel @Inject constructor(
         val onlineMemberCount: Int = 0,
         val totalMemberCount: Int = 0,
         val showEncryptionBadge: Boolean = true,
-        val isGroupChat: Boolean = false
+        val isGroupChat: Boolean = false,
+        val groupMembers: List<GroupMember> = emptyList(),
+        val availablePeers: List<PeerNode> = emptyList()
     )
 
     private val _state = MutableStateFlow(UiState())
@@ -82,7 +86,8 @@ class ChatViewModel @Inject constructor(
                     selfNodeId = identity?.nodeId ?: "",
                     isGroupChat = true,
                     onlineMemberCount = onlineMembers,
-                    totalMemberCount = totalMembers
+                    totalMemberCount = totalMembers,
+                    groupMembers = group.members
                 )
             } else {
                 val peer = peerRepo.getPeer(peerNodeId)
@@ -142,6 +147,51 @@ class ChatViewModel @Inject constructor(
         }
     }
 
+    fun addMember(memberNodeId: String) {
+        viewModelScope.launch {
+            try {
+                groupControlManager.addMemberToGroup(
+                    groupId = conversationId,
+                    newMemberNodeId = memberNodeId,
+                    ourNodeId = _state.value.selfNodeId
+                )
+                // Refresh group state
+                val group = groupRepo.getGroup(conversationId)
+                if (group != null) {
+                    _state.value = _state.value.copy(
+                        groupMembers = group.members,
+                        totalMemberCount = group.members.filter { it.nodeId != _state.value.selfNodeId }.size
+                    )
+                }
+            } catch (e: Exception) {
+                _state.value = _state.value.copy(sendError = "Failed to add member: ${e.message}")
+            }
+        }
+    }
+
+    fun updateGroupName(newName: String) {
+        viewModelScope.launch {
+            try {
+                groupControlManager.updateGroupName(conversationId, newName)
+                _state.value = _state.value.copy(peerName = newName)
+            } catch (e: Exception) {
+                _state.value = _state.value.copy(sendError = "Failed to rename group: ${e.message}")
+            }
+        }
+    }
+
+    fun loadAvailablePeers() {
+        viewModelScope.launch {
+            val peers = peerRepo.observeNearbyPeers()
+            peers.collect { peerList ->
+                val nonMembers = peerList.filter { peer ->
+                    _state.value.groupMembers.none { it.nodeId == peer.nodeId }
+                }
+                _state.value = _state.value.copy(availablePeers = nonMembers)
+            }
+        }
+    }
+
     fun clearSendError() {
         _state.value = _state.value.copy(sendError = null)
     }
@@ -157,6 +207,7 @@ fun ChatScreen(
 ) {
     val state by viewModel.state.collectAsState()
     var messageText by remember { mutableStateOf("") }
+    var showGroupSettings by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
     val snackbarHostState = remember { SnackbarHostState() }
 
@@ -232,6 +283,16 @@ fun ChatScreen(
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
                     }
+                },
+                actions = {
+                    if (state.isGroupChat) {
+                        IconButton(onClick = {
+                            viewModel.loadAvailablePeers()
+                            showGroupSettings = true
+                        }) {
+                            Icon(Icons.Filled.Settings, "Group settings")
+                        }
+                    }
                 }
             )
         },
@@ -286,6 +347,117 @@ fun ChatScreen(
             }
         }
     }
+
+    if (showGroupSettings) {
+        GroupSettingsDialog(
+            groupName = state.peerName ?: "",
+            members = state.groupMembers,
+            availablePeers = state.availablePeers,
+            onDismiss = { showGroupSettings = false },
+            onRename = { newName ->
+                viewModel.updateGroupName(newName)
+                showGroupSettings = false
+            },
+            onAddMember = { nodeId ->
+                viewModel.addMember(nodeId)
+            }
+        )
+    }
+}
+
+@Composable
+private fun GroupSettingsDialog(
+    groupName: String,
+    members: List<GroupMember>,
+    availablePeers: List<PeerNode>,
+    onDismiss: () -> Unit,
+    onRename: (String) -> Unit,
+    onAddMember: (String) -> Unit
+) {
+    var editedName by remember { mutableStateOf(groupName) }
+    var showAddMember by remember { mutableStateOf(false) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Group Settings") },
+        text = {
+            Column {
+                OutlinedTextField(
+                    value = editedName,
+                    onValueChange = { editedName = it },
+                    label = { Text("Group Name") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                if (editedName != groupName && editedName.isNotBlank()) {
+                    TextButton(onClick = { onRename(editedName) }) {
+                        Text("Save Name")
+                    }
+                }
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    "Members (${members.size})",
+                    style = MaterialTheme.typography.labelMedium
+                )
+                members.forEach { member ->
+                    ListItem(
+                        headlineContent = {
+                            Text(member.displayName ?: member.nodeId.take(8))
+                        },
+                        supportingContent = {
+                            Text(
+                                member.role.name,
+                                style = MaterialTheme.typography.labelSmall
+                            )
+                        },
+                        leadingContent = {
+                            Icon(
+                                Icons.Filled.Person,
+                                contentDescription = null,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
+                    )
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                TextButton(onClick = { showAddMember = !showAddMember }) {
+                    Icon(Icons.Filled.PersonAdd, null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Add Member")
+                }
+                if (showAddMember) {
+                    if (availablePeers.isEmpty()) {
+                        Text(
+                            "No available peers to add",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.outline,
+                            modifier = Modifier.padding(start = 16.dp)
+                        )
+                    } else {
+                        availablePeers.forEach { peer ->
+                            ListItem(
+                                modifier = Modifier.clickable { onAddMember(peer.nodeId) },
+                                headlineContent = {
+                                    Text(peer.displayName ?: peer.nodeId.take(8))
+                                },
+                                leadingContent = {
+                                    Icon(
+                                        Icons.Filled.PersonAdd,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(24.dp),
+                                        tint = MaterialTheme.colorScheme.primary
+                                    )
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Done") }
+        }
+    )
 }
 
 @Composable
