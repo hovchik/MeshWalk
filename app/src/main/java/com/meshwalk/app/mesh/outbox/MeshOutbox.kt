@@ -3,9 +3,11 @@ package com.meshwalk.app.mesh.outbox
 import com.meshwalk.app.crypto.envelope.MessageEnvelopeManager
 import com.meshwalk.app.crypto.group.GroupKeyManager
 import com.meshwalk.app.crypto.keys.KeyStorage
+import com.meshwalk.app.crypto.session.SessionManager
 import com.meshwalk.app.domain.model.DeliveryStatus
 import com.meshwalk.app.domain.model.MeshMessage
 import com.meshwalk.app.domain.repository.MessageRepository
+import com.meshwalk.app.domain.repository.PeerRepository
 import com.meshwalk.app.domain.usecase.MeshOutboxPort
 import com.meshwalk.app.routing.engine.MeshRoutingEngine
 import timber.log.Timber
@@ -30,6 +32,8 @@ class MeshOutbox @Inject constructor(
     private val envelopeManager: MessageEnvelopeManager,
     private val groupKeyManager: GroupKeyManager,
     private val keyStorage: KeyStorage,
+    private val sessionManager: SessionManager,
+    private val peerRepo: PeerRepository,
     private val routingEngine: MeshRoutingEngine,
     private val messageRepo: MessageRepository
 ) : MeshOutboxPort {
@@ -43,6 +47,9 @@ class MeshOutbox @Inject constructor(
         }
 
         try {
+            // Ensure a pairwise session exists before encrypting
+            ensureSession(senderNodeId, recipientNodeId)
+
             val packet = envelopeManager.encryptForPeer(
                 message = message,
                 senderNodeId = senderNodeId,
@@ -59,6 +66,29 @@ class MeshOutbox @Inject constructor(
             Timber.e(e, "Failed to encrypt/send message ${message.messageId.take(8)}")
             messageRepo.updateDeliveryStatus(message.messageId, DeliveryStatus.FAILED)
         }
+    }
+
+    /**
+     * Ensure a pairwise session exists with the peer.
+     * If no session exists, establish one using ECDH with the peer's exchange key.
+     */
+    private suspend fun ensureSession(ourNodeId: String, peerNodeId: String) {
+        if (sessionManager.hasSession(ourNodeId, peerNodeId)) return
+
+        val ourExchangeKey = keyStorage.getExchangePrivateKey(ourNodeId)
+            ?: throw IllegalStateException("No exchange private key for $ourNodeId")
+
+        val peer = peerRepo.getPeer(peerNodeId)
+        val peerExchangeKey = peer?.publicExchangeKey
+            ?: throw IllegalStateException("No exchange public key for peer $peerNodeId")
+
+        sessionManager.establishSessionWithKeys(
+            ourNodeId = ourNodeId,
+            peerNodeId = peerNodeId,
+            ourExchangePrivateKey = ourExchangeKey,
+            peerPublicExchangeKey = peerExchangeKey
+        )
+        Timber.d("Auto-established session with ${peerNodeId.take(8)} before sending")
     }
 
     override suspend fun enqueueGroupMessage(
