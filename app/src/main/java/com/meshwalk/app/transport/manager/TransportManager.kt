@@ -45,11 +45,11 @@ class TransportManager @Inject constructor(
     )
     val transportEvents: SharedFlow<TransportEvent> = _transportEvents
 
-    // Endpoint to transport mapping
-    private val endpointTransportMap = mutableMapOf<String, MeshTransport>()
+    // Endpoint to transport mapping (accessed from multiple coroutines)
+    private val endpointTransportMap = java.util.concurrent.ConcurrentHashMap<String, MeshTransport>()
 
     // NodeId to endpointId mapping (across transports)
-    private val nodeEndpointMap = mutableMapOf<String, String>()
+    private val nodeEndpointMap = java.util.concurrent.ConcurrentHashMap<String, String>()
 
     init {
         // Merge events from all transports

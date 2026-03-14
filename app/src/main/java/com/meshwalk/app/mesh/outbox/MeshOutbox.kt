@@ -3,7 +3,9 @@ package com.meshwalk.app.mesh.outbox
 import com.meshwalk.app.crypto.envelope.MessageEnvelopeManager
 import com.meshwalk.app.crypto.group.GroupKeyManager
 import com.meshwalk.app.crypto.keys.KeyStorage
+import com.meshwalk.app.domain.model.DeliveryStatus
 import com.meshwalk.app.domain.model.MeshMessage
+import com.meshwalk.app.domain.repository.MessageRepository
 import com.meshwalk.app.domain.usecase.MeshOutboxPort
 import com.meshwalk.app.routing.engine.MeshRoutingEngine
 import timber.log.Timber
@@ -28,7 +30,8 @@ class MeshOutbox @Inject constructor(
     private val envelopeManager: MessageEnvelopeManager,
     private val groupKeyManager: GroupKeyManager,
     private val keyStorage: KeyStorage,
-    private val routingEngine: MeshRoutingEngine
+    private val routingEngine: MeshRoutingEngine,
+    private val messageRepo: MessageRepository
 ) : MeshOutboxPort {
 
     override suspend fun enqueueMessage(message: MeshMessage, recipientNodeId: String) {
@@ -47,11 +50,14 @@ class MeshOutbox @Inject constructor(
                 signingPrivateKey = signingKey
             )
             val sent = routingEngine.sendPacket(packet)
-            if (!sent) {
+            if (sent) {
+                messageRepo.updateDeliveryStatus(message.messageId, DeliveryStatus.SENT)
+            } else {
                 Timber.w("Packet ${packet.packetId.take(8)} queued for later delivery")
             }
         } catch (e: Exception) {
             Timber.e(e, "Failed to encrypt/send message ${message.messageId.take(8)}")
+            messageRepo.updateDeliveryStatus(message.messageId, DeliveryStatus.FAILED)
         }
     }
 

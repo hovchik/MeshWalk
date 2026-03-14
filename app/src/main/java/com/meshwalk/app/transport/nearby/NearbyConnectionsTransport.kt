@@ -53,9 +53,9 @@ class NearbyConnectionsTransport @Inject constructor(
         Nearby.getConnectionsClient(context)
     }
 
-    // Track endpoint -> nodeId mapping
-    private val endpointNodeMap = mutableMapOf<String, String>()
-    private val connectedEndpoints = mutableSetOf<String>()
+    // Track endpoint -> nodeId mapping (accessed from multiple callbacks)
+    private val endpointNodeMap = java.util.concurrent.ConcurrentHashMap<String, String>()
+    private val connectedEndpoints = java.util.Collections.synchronizedSet(mutableSetOf<String>())
     private var currentAdvertisement: NodeAdvertisement? = null
 
     // -- Discovery --
