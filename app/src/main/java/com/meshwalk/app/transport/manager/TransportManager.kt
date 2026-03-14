@@ -222,8 +222,32 @@ class TransportManager @Inject constructor(
 
             is TransportEvent.Connected -> {
                 event.nodeId?.let { nodeId ->
-                    peerRepository.getPeer(nodeId)?.let { peer ->
+                    // For incoming connections, EndpointDiscovered may not have fired,
+                    // so ensure the endpoint mapping exists before sending the advertisement.
+                    if (nodeId !in nodeEndpointMap) {
+                        nodeEndpointMap[nodeId] = event.endpointId
+                        endpointTransportMap[event.endpointId] = nearbyTransport
+                    }
+
+                    // Ensure the peer exists in the repository (may be missing for
+                    // incoming connections where EndpointDiscovered was never emitted).
+                    val peer = peerRepository.getPeer(nodeId)
+                    if (peer != null) {
                         peerRepository.upsertPeer(peer.copy(isConnected = true))
+                    } else {
+                        peerRepository.upsertPeer(
+                            PeerNode(
+                                nodeId = nodeId,
+                                displayName = null,
+                                identityType = com.meshwalk.app.domain.model.IdentityType.NAMED,
+                                publicSigningKey = null,
+                                publicExchangeKey = null,
+                                connectionType = ConnectionType.NEARBY_CONNECTIONS,
+                                hopCount = 0,
+                                signalStrength = null,
+                                isConnected = true
+                            )
+                        )
                     }
 
                     // Send our advertisement to the newly connected peer so they get
@@ -268,15 +292,32 @@ class TransportManager @Inject constructor(
                     try {
                         val advert = NodeAdvertisement.deserialize(advertData)
                         if (advert != null) {
-                            peerRepository.getPeer(advert.nodeId)?.let { peer ->
+                            val existingPeer = peerRepository.getPeer(advert.nodeId)
+                            if (existingPeer != null) {
                                 peerRepository.upsertPeer(
-                                    peer.copy(
+                                    existingPeer.copy(
                                         publicExchangeKey = advert.publicExchangeKey,
-                                        displayName = advert.displayName ?: peer.displayName
+                                        displayName = advert.displayName ?: existingPeer.displayName
                                     )
                                 )
-                                Timber.d("Updated peer ${advert.nodeId.take(8)} with exchange key from advertisement")
+                            } else {
+                                // Peer record may be missing for incoming connections
+                                // where EndpointDiscovered was never emitted.
+                                peerRepository.upsertPeer(
+                                    PeerNode(
+                                        nodeId = advert.nodeId,
+                                        displayName = advert.displayName,
+                                        identityType = com.meshwalk.app.domain.model.IdentityType.NAMED,
+                                        publicSigningKey = null,
+                                        publicExchangeKey = advert.publicExchangeKey,
+                                        connectionType = ConnectionType.NEARBY_CONNECTIONS,
+                                        hopCount = 0,
+                                        signalStrength = null,
+                                        isConnected = true
+                                    )
+                                )
                             }
+                            Timber.d("Updated peer ${advert.nodeId.take(8)} with exchange key from advertisement")
                         }
                     } catch (e: Exception) {
                         Timber.w(e, "Failed to parse advertisement from ${event.endpointId}")
