@@ -21,6 +21,8 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
 import timber.log.Timber
 import javax.inject.Inject
 
@@ -32,6 +34,7 @@ class MeshForegroundService : Service() {
     @Inject lateinit var identityRepository: IdentityRepository
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var meshStarted = false
 
     companion object {
         const val CHANNEL_ID = "mesh_service_channel"
@@ -54,24 +57,29 @@ class MeshForegroundService : Service() {
         startForeground(NOTIFICATION_ID, buildNotification())
         _isRunning.value = true
 
-        serviceScope.launch {
-            val identity = identityRepository.getActiveIdentity()
-            if (identity == null) {
-                Timber.w("No active identity found, mesh cannot start")
-                return@launch
+        if (!meshStarted) {
+            serviceScope.launch {
+                // Wait for identity to become available (user may still be in onboarding)
+                Timber.d("Waiting for active identity...")
+                val identity = identityRepository.observeActiveIdentity()
+                    .filterNotNull()
+                    .first()
+
+                Timber.d("Identity available: ${identity.nodeId}, starting mesh")
+
+                val advertisement = NodeAdvertisement(
+                    nodeId = identity.nodeId,
+                    displayName = identity.displayName,
+                    publicExchangeKey = identity.publicExchangeKey,
+                    capabilities = setOf("relay", "store-forward"),
+                    protocolVersion = 1
+                )
+
+                routingEngine.start(identity.nodeId)
+                transportManager.startMesh(advertisement)
+                meshStarted = true
+                Timber.d("Mesh started for node ${identity.nodeId}")
             }
-
-            val advertisement = NodeAdvertisement(
-                nodeId = identity.nodeId,
-                displayName = identity.displayName,
-                publicExchangeKey = identity.publicExchangeKey,
-                capabilities = setOf("relay", "store-forward"),
-                protocolVersion = 1
-            )
-
-            routingEngine.start(identity.nodeId)
-            transportManager.startMesh(advertisement)
-            Timber.d("Mesh started for node ${identity.nodeId}")
         }
 
         return START_STICKY
@@ -80,9 +88,12 @@ class MeshForegroundService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
-        serviceScope.launch {
-            transportManager.stopMesh()
-            routingEngine.stop()
+        if (meshStarted) {
+            runBlocking {
+                transportManager.stopMesh()
+                routingEngine.stop()
+            }
+            meshStarted = false
             Timber.d("Mesh stopped")
         }
         serviceScope.cancel()
