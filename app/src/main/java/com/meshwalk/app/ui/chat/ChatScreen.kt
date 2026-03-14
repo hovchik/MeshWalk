@@ -54,6 +54,8 @@ class ChatViewModel @Inject constructor(
         val selfNodeId: String = "",
         val sendError: String? = null,
         val showHopCount: Boolean = false,
+        val onlineMemberCount: Int = 0,
+        val totalMemberCount: Int = 0,
         val showEncryptionBadge: Boolean = true,
         val isGroupChat: Boolean = false
     )
@@ -68,11 +70,19 @@ class ChatViewModel @Inject constructor(
             // Check if this is a group conversation
             val group = groupRepo.getGroup(conversationId)
             if (group != null) {
+                // For group chats, check how many members are actually online
+                val onlineMembers = group.members
+                    .filter { it.nodeId != identity?.nodeId }
+                    .mapNotNull { peerRepo.getPeer(it.nodeId) }
+                    .count { it.isConnected }
+                val totalMembers = group.members.filter { it.nodeId != identity?.nodeId }.size
                 _state.value = _state.value.copy(
                     peerName = group.name,
-                    peerOnline = true,
+                    peerOnline = onlineMembers > 0,
                     selfNodeId = identity?.nodeId ?: "",
-                    isGroupChat = true
+                    isGroupChat = true,
+                    onlineMemberCount = onlineMembers,
+                    totalMemberCount = totalMembers
                 )
             } else {
                 val peer = peerRepo.getPeer(peerNodeId)
@@ -185,7 +195,7 @@ fun ChatScreen(
                                 )
                                 Spacer(modifier = Modifier.width(4.dp))
                                 Text(
-                                    text = "Group",
+                                    text = "${state.onlineMemberCount}/${state.totalMemberCount} online",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
