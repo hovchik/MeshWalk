@@ -80,7 +80,10 @@ class MeshOutbox @Inject constructor(
 
         val peer = peerRepo.getPeer(peerNodeId)
         val peerExchangeKey = peer?.publicExchangeKey
-            ?: throw IllegalStateException("No exchange public key for peer $peerNodeId")
+            ?: throw IllegalStateException(
+                "Waiting for key exchange with ${peer?.displayName ?: peerNodeId.take(8)}. " +
+                "Please try again in a moment."
+            )
 
         sessionManager.establishSessionWithKeys(
             ourNodeId = ourNodeId,

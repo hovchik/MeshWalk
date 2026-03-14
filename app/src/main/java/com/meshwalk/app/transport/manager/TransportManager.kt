@@ -36,6 +36,11 @@ class TransportManager @Inject constructor(
     private val peerRepository: PeerRepository
 ) : TransportManagerPort {
 
+    companion object {
+        /** Magic byte prefix to distinguish advertisement payloads from regular mesh packets. */
+        const val ADVERTISEMENT_MAGIC: Byte = 0x4D // 'M' for MeshWalk advertisement
+    }
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var currentAdvertisement: NodeAdvertisement? = null
 
@@ -58,8 +63,10 @@ class TransportManager @Inject constructor(
                 nearbyTransport.discoveredEndpoints,
                 bleTransport.discoveredEndpoints
             ).collect { event ->
-                handleTransportEvent(event)
-                _transportEvents.emit(event)
+                val consumed = handleTransportEvent(event)
+                if (!consumed) {
+                    _transportEvents.emit(event)
+                }
             }
         }
     }
@@ -182,7 +189,11 @@ class TransportManager @Inject constructor(
 
     // -- Event handling --
 
-    private suspend fun handleTransportEvent(event: TransportEvent) {
+    /**
+     * Handle a transport event. Returns true if the event was consumed
+     * and should NOT be forwarded to the routing layer.
+     */
+    private suspend fun handleTransportEvent(event: TransportEvent): Boolean {
         when (event) {
             is TransportEvent.EndpointDiscovered -> {
                 event.nodeId?.let { nodeId ->
@@ -214,6 +225,22 @@ class TransportManager @Inject constructor(
                     peerRepository.getPeer(nodeId)?.let { peer ->
                         peerRepository.upsertPeer(peer.copy(isConnected = true))
                     }
+
+                    // Send our advertisement to the newly connected peer so they get
+                    // our publicExchangeKey (needed for session establishment).
+                    currentAdvertisement?.let { advert ->
+                        val endpointId = nodeEndpointMap[nodeId] ?: return@let
+                        val transport = endpointTransportMap[endpointId] ?: return@let
+                        val advertData = advert.serialize()
+                        // Prefix with a magic byte to distinguish from regular packets
+                        val payload = ByteArray(1 + advertData.size)
+                        payload[0] = ADVERTISEMENT_MAGIC
+                        advertData.copyInto(payload, 1)
+                        transport.sendData(endpointId, payload).onFailure {
+                            Timber.w("Failed to send advertisement to $nodeId")
+                        }
+                        Timber.d("Sent advertisement to $nodeId (exchangeKey included)")
+                    }
                 }
             }
 
@@ -234,8 +261,33 @@ class TransportManager @Inject constructor(
                 endpointTransportMap.remove(event.endpointId)
             }
 
+            is TransportEvent.DataReceived -> {
+                // Check if this is an advertisement payload (magic byte prefix)
+                if (event.data.isNotEmpty() && event.data[0] == ADVERTISEMENT_MAGIC) {
+                    val advertData = event.data.copyOfRange(1, event.data.size)
+                    try {
+                        val advert = NodeAdvertisement.deserialize(advertData)
+                        if (advert != null) {
+                            peerRepository.getPeer(advert.nodeId)?.let { peer ->
+                                peerRepository.upsertPeer(
+                                    peer.copy(
+                                        publicExchangeKey = advert.publicExchangeKey,
+                                        displayName = advert.displayName ?: peer.displayName
+                                    )
+                                )
+                                Timber.d("Updated peer ${advert.nodeId.take(8)} with exchange key from advertisement")
+                            }
+                        }
+                    } catch (e: Exception) {
+                        Timber.w(e, "Failed to parse advertisement from ${event.endpointId}")
+                    }
+                    return true // Consumed: don't forward advertisement to routing layer
+                }
+            }
+
             else -> { /* handled by routing layer */ }
         }
+        return false
     }
 
     // -- Packet serialization --
