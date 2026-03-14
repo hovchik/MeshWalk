@@ -1,6 +1,8 @@
 package com.meshwalk.app.ui.groups
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -18,8 +20,10 @@ import com.meshwalk.app.domain.model.ConversationType
 import com.meshwalk.app.domain.model.GroupInfo
 import com.meshwalk.app.domain.model.GroupInvitation
 import com.meshwalk.app.domain.model.PeerNode
+import com.meshwalk.app.domain.repository.ConversationRepository
 import com.meshwalk.app.domain.repository.GroupRepository
 import com.meshwalk.app.domain.repository.IdentityRepository
+import com.meshwalk.app.domain.repository.MessageRepository
 import com.meshwalk.app.domain.repository.PeerRepository
 import com.meshwalk.app.domain.usecase.CreateGroupUseCase
 import com.meshwalk.app.mesh.group.GroupControlManager
@@ -33,6 +37,8 @@ class GroupListViewModel @Inject constructor(
     private val groupRepo: GroupRepository,
     private val peerRepo: PeerRepository,
     private val identityRepo: IdentityRepository,
+    private val conversationRepo: ConversationRepository,
+    private val messageRepo: MessageRepository,
     private val createGroup: CreateGroupUseCase,
     private val groupControlManager: GroupControlManager
 ) : ViewModel() {
@@ -98,6 +104,18 @@ class GroupListViewModel @Inject constructor(
         }
     }
 
+    fun deleteGroup(groupId: String) {
+        viewModelScope.launch {
+            try {
+                messageRepo.deleteMessagesByConversation(groupId)
+                conversationRepo.deleteConversation(groupId)
+                groupRepo.deleteGroup(groupId)
+            } catch (e: Exception) {
+                _state.value = _state.value.copy(error = "Failed to delete group: ${e.message}")
+            }
+        }
+    }
+
     fun clearError() {
         _state.value = _state.value.copy(error = null)
     }
@@ -112,6 +130,7 @@ fun GroupListScreen(
     val invitations by viewModel.pendingInvitations.collectAsState()
     val uiState by viewModel.state.collectAsState()
     var showCreateDialog by remember { mutableStateOf(false) }
+    var deleteTarget by remember { mutableStateOf<GroupInfo?>(null) }
     val snackbarHostState = remember { SnackbarHostState() }
 
     LaunchedEffect(uiState.error) {
@@ -198,7 +217,11 @@ fun GroupListScreen(
                         )
                     }
                     items(groups, key = { it.groupId }) { group ->
-                        GroupItem(group = group, onClick = { onGroupClick(group.groupId) })
+                        GroupItem(
+                            group = group,
+                            onClick = { onGroupClick(group.groupId) },
+                            onDelete = { deleteTarget = group }
+                        )
                     }
                 }
             }
@@ -211,6 +234,27 @@ fun GroupListScreen(
                 onCreate = { name, members, temp ->
                     viewModel.createNewGroup(name, members, temp)
                     showCreateDialog = false
+                }
+            )
+        }
+
+        deleteTarget?.let { group ->
+            AlertDialog(
+                onDismissRequest = { deleteTarget = null },
+                title = { Text("Delete Group") },
+                text = {
+                    Text("Delete \"${group.name}\" and all its messages? This cannot be undone.")
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        viewModel.deleteGroup(group.groupId)
+                        deleteTarget = null
+                    }) {
+                        Text("Delete", color = MaterialTheme.colorScheme.error)
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { deleteTarget = null }) { Text("Cancel") }
                 }
             )
         }
@@ -258,10 +302,14 @@ private fun InvitationItem(
     )
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun GroupItem(group: GroupInfo, onClick: () -> Unit) {
+private fun GroupItem(group: GroupInfo, onClick: () -> Unit, onDelete: () -> Unit = {}) {
     ListItem(
-        modifier = Modifier.clickable(onClick = onClick),
+        modifier = Modifier.combinedClickable(
+            onClick = onClick,
+            onLongClick = onDelete
+        ),
         headlineContent = { Text(group.name) },
         supportingContent = {
             Text(

@@ -98,12 +98,21 @@ class MessageRepositoryImpl @Inject constructor(
             .map { entities -> entities.map { it.toDomain() } }
     }
 
+    override fun observeRecentMessages(conversationId: String, limit: Int): Flow<List<MeshMessage>> {
+        return messageDao.observeRecentByConversation(conversationId, limit)
+            .map { entities -> entities.map { it.toDomain() } }
+    }
+
     override suspend fun getUndeliveredMessages(): List<MeshMessage> {
         return messageDao.getUndelivered().map { it.toDomain() }
     }
 
     override suspend fun deleteMessage(messageId: String) {
         messageDao.delete(messageId)
+    }
+
+    override suspend fun deleteMessagesByConversation(conversationId: String) {
+        messageDao.deleteByConversation(conversationId)
     }
 
     override suspend fun deleteExpiredMessages() {
@@ -361,6 +370,7 @@ class SettingsRepositoryImpl @Inject constructor(
         private val MESSAGE_TTL = intPreferencesKey("message_ttl")
         private val SHOW_HOP_COUNT = booleanPreferencesKey("show_hop_count")
         private val SHOW_ENCRYPTION_BADGE = booleanPreferencesKey("show_encryption_badge")
+        private val GROUP_MESSAGE_HISTORY_COUNT = intPreferencesKey("group_message_history_count")
         private val ONBOARDING_DONE = booleanPreferencesKey("onboarding_done")
     }
 
@@ -383,6 +393,7 @@ class SettingsRepositoryImpl @Inject constructor(
             prefs[MESSAGE_TTL] = settings.messageTtl
             prefs[SHOW_HOP_COUNT] = settings.showHopCount
             prefs[SHOW_ENCRYPTION_BADGE] = settings.showEncryptionBadge
+            prefs[GROUP_MESSAGE_HISTORY_COUNT] = settings.groupMessageHistoryCount
         }
     }
 
@@ -407,6 +418,7 @@ class SettingsRepositoryImpl @Inject constructor(
         autoStartMesh = this[AUTO_START] ?: true,
         messageTtl = this[MESSAGE_TTL] ?: MeshPacket.DEFAULT_TTL,
         showHopCount = this[SHOW_HOP_COUNT] ?: false,
-        showEncryptionBadge = this[SHOW_ENCRYPTION_BADGE] ?: true
+        showEncryptionBadge = this[SHOW_ENCRYPTION_BADGE] ?: true,
+        groupMessageHistoryCount = this[GROUP_MESSAGE_HISTORY_COUNT] ?: 50
     )
 }

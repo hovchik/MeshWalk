@@ -42,6 +42,9 @@ interface MessageDao {
     @Query("SELECT * FROM messages WHERE conversationId = :conversationId ORDER BY timestamp ASC")
     fun observeByConversation(conversationId: String): Flow<List<MessageEntity>>
 
+    @Query("SELECT * FROM (SELECT * FROM messages WHERE conversationId = :conversationId ORDER BY timestamp DESC LIMIT :limit) ORDER BY timestamp ASC")
+    fun observeRecentByConversation(conversationId: String, limit: Int): Flow<List<MessageEntity>>
+
     @Query("UPDATE messages SET deliveryStatus = :status WHERE messageId = :messageId")
     suspend fun updateStatus(messageId: String, status: String)
 
@@ -53,6 +56,9 @@ interface MessageDao {
 
     @Query("DELETE FROM messages WHERE messageId = :messageId")
     suspend fun delete(messageId: String)
+
+    @Query("DELETE FROM messages WHERE conversationId = :conversationId")
+    suspend fun deleteByConversation(conversationId: String)
 
     @Query("DELETE FROM messages WHERE expiresAt IS NOT NULL AND expiresAt < :now")
     suspend fun deleteExpired(now: Long)

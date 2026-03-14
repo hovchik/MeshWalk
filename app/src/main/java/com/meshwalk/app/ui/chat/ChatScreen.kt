@@ -103,20 +103,27 @@ class ChatViewModel @Inject constructor(
             conversationRepo.clearUnread(conversationId)
         }
 
-        // Observe messages
-        viewModelScope.launch {
-            messageRepo.observeMessages(conversationId).collect { messages ->
-                _state.value = _state.value.copy(messages = messages)
-            }
-        }
-
-        // Observe settings for display preferences
+        // Observe settings first, then messages (need settings for group history limit)
         viewModelScope.launch {
             settingsRepo.observeSettings().collect { settings ->
                 _state.value = _state.value.copy(
                     showHopCount = settings.showHopCount,
                     showEncryptionBadge = settings.showEncryptionBadge
                 )
+            }
+        }
+
+        // Observe messages — for group chats, limit to the configured history count
+        viewModelScope.launch {
+            val settings = settingsRepo.getSettings()
+            val group = groupRepo.getGroup(conversationId)
+            val messagesFlow = if (group != null) {
+                messageRepo.observeRecentMessages(conversationId, settings.groupMessageHistoryCount)
+            } else {
+                messageRepo.observeMessages(conversationId)
+            }
+            messagesFlow.collect { messages ->
+                _state.value = _state.value.copy(messages = messages)
             }
         }
     }

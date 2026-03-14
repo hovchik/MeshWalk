@@ -148,6 +148,49 @@ fun SettingsScreen(
         )
         HorizontalDivider()
 
+        // Groups
+        SectionHeader("Groups")
+        ListItem(
+            headlineContent = { Text("Message history on rejoin") },
+            supportingContent = {
+                Text("Load last ${state.settings.groupMessageHistoryCount} messages when opening a group")
+            },
+            trailingContent = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    FilledTonalIconButton(
+                        onClick = {
+                            val current = state.settings.groupMessageHistoryCount
+                            if (current > 10) {
+                                viewModel.updateSettings { it.copy(groupMessageHistoryCount = current - 10) }
+                            }
+                        },
+                        enabled = state.settings.groupMessageHistoryCount > 10
+                    ) {
+                        Icon(Icons.Filled.Remove, "Decrease")
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "${state.settings.groupMessageHistoryCount}",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    FilledTonalIconButton(
+                        onClick = {
+                            val current = state.settings.groupMessageHistoryCount
+                            if (current < 500) {
+                                viewModel.updateSettings { it.copy(groupMessageHistoryCount = current + 10) }
+                            }
+                        },
+                        enabled = state.settings.groupMessageHistoryCount < 500
+                    ) {
+                        Icon(Icons.Filled.Add, "Increase")
+                    }
+                }
+            }
+        )
+        HorizontalDivider()
+
         // Debug
         SectionHeader("Debug")
         ListItem(

@@ -1,6 +1,8 @@
 package com.meshwalk.app.ui.chat
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -19,6 +21,7 @@ import com.meshwalk.app.domain.model.Conversation
 import com.meshwalk.app.domain.model.ConversationType
 import com.meshwalk.app.domain.repository.ConversationRepository
 import com.meshwalk.app.domain.repository.IdentityRepository
+import com.meshwalk.app.domain.repository.MessageRepository
 import com.meshwalk.app.domain.repository.SettingsRepository
 import com.meshwalk.app.util.TimeUtils
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -29,6 +32,7 @@ import javax.inject.Inject
 @HiltViewModel
 class ChatListViewModel @Inject constructor(
     private val conversationRepo: ConversationRepository,
+    private val messageRepo: MessageRepository,
     private val identityRepo: IdentityRepository,
     private val settingsRepo: SettingsRepository
 ) : ViewModel() {
@@ -65,6 +69,13 @@ class ChatListViewModel @Inject constructor(
             }.collect { _state.value = it }
         }
     }
+
+    fun deleteConversation(conversationId: String) {
+        viewModelScope.launch {
+            messageRepo.deleteMessagesByConversation(conversationId)
+            conversationRepo.deleteConversation(conversationId)
+        }
+    }
 }
 
 @Composable
@@ -74,6 +85,7 @@ fun ChatListScreen(
     viewModel: ChatListViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsState()
+    var deleteTarget by remember { mutableStateOf<Conversation?>(null) }
 
     LaunchedEffect(state.needsSetup) {
         if (state.needsSetup) onNeedSetup()
@@ -101,21 +113,48 @@ fun ChatListScreen(
                             conversation.conversationId,
                             conversation.participants.firstOrNull() ?: ""
                         )
-                    }
+                    },
+                    onDelete = { deleteTarget = conversation }
                 )
             }
         }
     }
+
+    deleteTarget?.let { conversation ->
+        AlertDialog(
+            onDismissRequest = { deleteTarget = null },
+            title = { Text("Delete Chat") },
+            text = {
+                Text("Delete this conversation and all its messages? This cannot be undone.")
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.deleteConversation(conversation.conversationId)
+                    deleteTarget = null
+                }) {
+                    Text("Delete", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { deleteTarget = null }) { Text("Cancel") }
+            }
+        )
+    }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ConversationItem(
     conversation: Conversation,
     showEncryptionBadge: Boolean = true,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    onDelete: () -> Unit = {}
 ) {
     ListItem(
-        modifier = Modifier.clickable(onClick = onClick),
+        modifier = Modifier.combinedClickable(
+            onClick = onClick,
+            onLongClick = onDelete
+        ),
         headlineContent = {
             Text(
                 text = conversation.title

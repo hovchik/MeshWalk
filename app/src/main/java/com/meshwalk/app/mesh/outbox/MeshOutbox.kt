@@ -43,7 +43,8 @@ class MeshOutbox @Inject constructor(
         val signingKey = keyStorage.getSigningPrivateKey(senderNodeId)
         if (signingKey == null) {
             Timber.e("Cannot send message: signing key not found for $senderNodeId")
-            return
+            messageRepo.updateDeliveryStatus(message.messageId, DeliveryStatus.FAILED)
+            throw IllegalStateException("Signing key not found. Please re-create your identity.")
         }
 
         try {
@@ -65,6 +66,7 @@ class MeshOutbox @Inject constructor(
         } catch (e: Exception) {
             Timber.e(e, "Failed to encrypt/send message ${message.messageId.take(8)}")
             messageRepo.updateDeliveryStatus(message.messageId, DeliveryStatus.FAILED)
+            throw e
         }
     }
 
@@ -103,13 +105,15 @@ class MeshOutbox @Inject constructor(
         val signingKey = keyStorage.getSigningPrivateKey(senderNodeId)
         if (signingKey == null) {
             Timber.e("Cannot send group message: signing key not found for $senderNodeId")
-            return
+            messageRepo.updateDeliveryStatus(message.messageId, DeliveryStatus.FAILED)
+            throw IllegalStateException("Signing key not found. Please re-create your identity.")
         }
 
         val senderKey = groupKeyManager.getSendingKey(groupId, senderNodeId)
         if (senderKey == null) {
             Timber.e("Cannot send group message: sender key not found for group $groupId")
-            return
+            messageRepo.updateDeliveryStatus(message.messageId, DeliveryStatus.FAILED)
+            throw IllegalStateException("Group encryption key not found. Try leaving and rejoining the group.")
         }
 
         try {
@@ -129,8 +133,11 @@ class MeshOutbox @Inject constructor(
                     Timber.w("Group packet ${memberPacket.packetId.take(8)} queued for ${recipientNodeId.take(8)}")
                 }
             }
+            messageRepo.updateDeliveryStatus(message.messageId, DeliveryStatus.SENT)
         } catch (e: Exception) {
             Timber.e(e, "Failed to encrypt/send group message ${message.messageId.take(8)}")
+            messageRepo.updateDeliveryStatus(message.messageId, DeliveryStatus.FAILED)
+            throw e
         }
     }
 }

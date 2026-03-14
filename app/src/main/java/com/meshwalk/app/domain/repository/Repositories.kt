@@ -17,8 +17,10 @@ interface MessageRepository {
     suspend fun saveMessage(message: MeshMessage)
     suspend fun updateDeliveryStatus(messageId: String, status: DeliveryStatus)
     fun observeMessages(conversationId: String): Flow<List<MeshMessage>>
+    fun observeRecentMessages(conversationId: String, limit: Int): Flow<List<MeshMessage>>
     suspend fun getUndeliveredMessages(): List<MeshMessage>
     suspend fun deleteMessage(messageId: String)
+    suspend fun deleteMessagesByConversation(conversationId: String)
     suspend fun deleteExpiredMessages()
     suspend fun getMessageById(messageId: String): MeshMessage?
 }
