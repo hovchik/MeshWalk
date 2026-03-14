@@ -170,16 +170,46 @@ class SessionManager @Inject constructor(
 
     /**
      * Derive the receiving message key for a given counter.
+     *
+     * Ratchets the receiving chain forward to match the sender's chain state.
+     * The sender ratchets their sending chain after each message, so we must
+     * ratchet our receiving chain the same way to derive matching keys.
      */
     suspend fun deriveReceivingKey(sessionId: String, counter: Int): SecretKey {
         val session = activeSessions[sessionId]
             ?: throw SessionNotFoundException(sessionId)
 
-        // Derive the specific message key
-        return keyManager.deriveSessionKey(
-            session.receivingChainKey.encoded,
+        // Ratchet the receiving chain from our current counter to the target counter.
+        // Each step: derive message key, then advance chain key.
+        var chainKey = session.receivingChainKey
+        for (i in session.receiveCounter until counter) {
+            // Skip intermediate message keys (advance chain only)
+            chainKey = keyManager.deriveSessionKey(
+                chainKey.encoded,
+                "chain-advance".toByteArray()
+            )
+        }
+
+        // Derive the actual message key at the target counter
+        val messageKey = keyManager.deriveSessionKey(
+            chainKey.encoded,
             "msg-$counter".toByteArray()
         )
+
+        // Advance chain one more time past this message and persist
+        val nextChainKey = keyManager.deriveSessionKey(
+            chainKey.encoded,
+            "chain-advance".toByteArray()
+        )
+        val updated = session.copy(
+            receivingChainKey = nextChainKey,
+            receiveCounter = counter + 1,
+            lastUsed = System.currentTimeMillis()
+        )
+        activeSessions[sessionId] = updated
+        sessionStore.saveSession(updated)
+
+        return messageKey
     }
 
     fun getSession(ourNodeId: String, peerNodeId: String): MeshSession? {
