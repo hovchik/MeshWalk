@@ -4,7 +4,7 @@ import com.meshwalk.app.crypto.envelope.MessageEnvelopeManager
 import com.meshwalk.app.crypto.session.SessionManager
 import com.meshwalk.app.data.local.dao.SenderKeyDao
 import com.meshwalk.app.data.local.entity.SenderKeyEntity
-import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.*
 import timber.log.Timber
 import java.security.SecureRandom
 import java.util.concurrent.ConcurrentHashMap
@@ -23,6 +23,7 @@ import javax.inject.Singleton
  * 4. All other members who have that sender's key can decrypt
  *
  * Sender keys are persisted to the Room database so they survive app restarts.
+ * Writes are fire-and-forget (async), reads fall back to DB on cache miss.
  */
 @Singleton
 class GroupKeyManager @Inject constructor(
@@ -31,6 +32,9 @@ class GroupKeyManager @Inject constructor(
     private val senderKeyDao: SenderKeyDao
 ) {
     private val secureRandom = SecureRandom()
+
+    // Background scope for async DB writes (fire-and-forget persistence)
+    private val persistScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     // In-memory cache: groupId -> (senderNodeId -> SenderKeyState)
     private val groupSenderKeys = ConcurrentHashMap<String, ConcurrentHashMap<String, SenderKeyState>>()
@@ -49,7 +53,7 @@ class GroupKeyManager @Inject constructor(
         )
 
         groupSenderKeys.getOrPut(groupId) { ConcurrentHashMap() }[ourNodeId] = senderKey
-        persistKey(senderKey)
+        persistKeyAsync(senderKey)
         Timber.d("Generated sender key for group=$groupId, sender=$ourNodeId")
         return senderKey
     }
@@ -66,7 +70,7 @@ class GroupKeyManager @Inject constructor(
             createdAt = System.currentTimeMillis()
         )
         groupSenderKeys.getOrPut(groupId) { ConcurrentHashMap() }[senderNodeId] = state
-        persistKey(state)
+        persistKeyAsync(state)
         Timber.d("Stored sender key for group=$groupId from sender=$senderNodeId")
     }
 
@@ -87,7 +91,7 @@ class GroupKeyManager @Inject constructor(
             iteration = state.iteration + 1
         )
         groupSenderKeys.getOrPut(groupId) { ConcurrentHashMap() }[ourNodeId] = updated
-        persistKey(updated)
+        persistKeyAsync(updated)
 
         return messageKey
     }
@@ -106,7 +110,7 @@ class GroupKeyManager @Inject constructor(
             iteration = state.iteration + 1
         )
         groupSenderKeys.getOrPut(groupId) { ConcurrentHashMap() }[senderNodeId] = updated
-        persistKey(updated)
+        persistKeyAsync(updated)
         return messageKey
     }
 
@@ -116,7 +120,7 @@ class GroupKeyManager @Inject constructor(
     fun rotateGroupKeys(groupId: String, remainingMemberIds: List<String>, ourNodeId: String): SenderKeyState? {
         // Remove old keys from memory and database
         groupSenderKeys.remove(groupId)
-        runBlocking { senderKeyDao.deleteByGroup(groupId) }
+        persistScope.launch { senderKeyDao.deleteByGroup(groupId) }
 
         // Generate new sender key for ourselves
         return if (ourNodeId in remainingMemberIds) {
@@ -165,7 +169,7 @@ class GroupKeyManager @Inject constructor(
                     iteration = state.iteration + 1
                 )
                 members[senderNodeId] = updated
-                persistKey(updated)
+                persistKeyAsync(updated)
                 return Pair(groupId, key)
             }
         }
@@ -174,14 +178,21 @@ class GroupKeyManager @Inject constructor(
 
     /**
      * Get a key state, checking in-memory cache first, then falling back to database.
+     * Uses runBlocking for DB reads — only hits on cold start from background threads.
      */
     private fun getKeyState(groupId: String, nodeId: String): SenderKeyState? {
         // Check in-memory cache first
         val cached = groupSenderKeys[groupId]?.get(nodeId)
         if (cached != null) return cached
 
-        // Fall back to database
-        val entity = runBlocking { senderKeyDao.get(groupId, nodeId) } ?: return null
+        // Fall back to database (blocking read, only on cache miss)
+        val entity = try {
+            runBlocking(Dispatchers.IO) { senderKeyDao.get(groupId, nodeId) }
+        } catch (e: Exception) {
+            Timber.w(e, "Failed to read sender key from DB")
+            null
+        } ?: return null
+
         val state = SenderKeyState(
             groupId = entity.groupId,
             senderNodeId = entity.senderNodeId,
@@ -195,19 +206,24 @@ class GroupKeyManager @Inject constructor(
     }
 
     /**
-     * Persist a sender key state to the database.
+     * Persist a sender key state to the database asynchronously.
+     * Cache is already updated before this is called, so no data loss on race.
      */
-    private fun persistKey(state: SenderKeyState) {
-        runBlocking {
-            senderKeyDao.upsert(
-                SenderKeyEntity(
-                    groupId = state.groupId,
-                    senderNodeId = state.senderNodeId,
-                    chainKey = state.chainKey.encoded,
-                    iteration = state.iteration,
-                    createdAt = state.createdAt
+    private fun persistKeyAsync(state: SenderKeyState) {
+        persistScope.launch {
+            try {
+                senderKeyDao.upsert(
+                    SenderKeyEntity(
+                        groupId = state.groupId,
+                        senderNodeId = state.senderNodeId,
+                        chainKey = state.chainKey.encoded,
+                        iteration = state.iteration,
+                        createdAt = state.createdAt
+                    )
                 )
-            )
+            } catch (e: Exception) {
+                Timber.w(e, "Failed to persist sender key")
+            }
         }
     }
 

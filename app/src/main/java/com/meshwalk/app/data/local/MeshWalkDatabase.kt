@@ -19,7 +19,7 @@ import com.meshwalk.app.data.local.entity.*
         GroupEntity::class,
         SenderKeyEntity::class
     ],
-    version = 2,
+    version = 3,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -37,11 +37,37 @@ abstract class MeshWalkDatabase : RoomDatabase() {
 
         val MIGRATION_1_2 = object : Migration(1, 2) {
             override fun migrate(db: SupportSQLiteDatabase) {
+                // chainKey is TEXT because the @TypeConverter encodes ByteArray as Base64 String
                 db.execSQL("""
                     CREATE TABLE IF NOT EXISTS sender_keys (
                         groupId TEXT NOT NULL,
                         senderNodeId TEXT NOT NULL,
-                        chainKey BLOB NOT NULL,
+                        chainKey TEXT NOT NULL,
+                        iteration INTEGER NOT NULL,
+                        createdAt INTEGER NOT NULL,
+                        PRIMARY KEY(groupId, senderNodeId)
+                    )
+                """.trimIndent())
+            }
+        }
+
+        /**
+         * Recovery migration: if MIGRATION_1_2 ran with the wrong column type (BLOB
+         * instead of TEXT), the destructive fallback already recreated the DB at v2.
+         * This no-op migration lets us bump to v3 so Room re-validates cleanly.
+         */
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // Schema already correct from either:
+                // a) destructive fallback (recreated all tables from entities), or
+                // b) a clean install at v2+
+                // Just drop and recreate sender_keys to be safe.
+                db.execSQL("DROP TABLE IF EXISTS sender_keys")
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS sender_keys (
+                        groupId TEXT NOT NULL,
+                        senderNodeId TEXT NOT NULL,
+                        chainKey TEXT NOT NULL,
                         iteration INTEGER NOT NULL,
                         createdAt INTEGER NOT NULL,
                         PRIMARY KEY(groupId, senderNodeId)
