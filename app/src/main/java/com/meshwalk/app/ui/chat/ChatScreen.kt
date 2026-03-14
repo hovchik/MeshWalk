@@ -99,12 +99,23 @@ class ChatViewModel @Inject constructor(
                     groupMembers = group.members
                 )
             } else {
+                // For direct chats: use peer display name, fall back to conversation's cached name
+                val conversation = conversationRepo.getConversation(conversationId)
                 val peer = peerRepo.getPeer(peerNodeId)
+                val displayName = peer?.displayName
+                    ?: conversation?.peerDisplayName
+                    ?: peerNodeId.take(8)
+
                 _state.value = _state.value.copy(
-                    peerName = peer?.displayName ?: peerNodeId.take(8),
+                    peerName = displayName,
                     peerOnline = peer?.isConnected == true,
                     selfNodeId = identity?.nodeId ?: ""
                 )
+
+                // Update the cached peer name if we have a fresh one from the peer
+                if (peer?.displayName != null && conversation?.peerDisplayName != peer.displayName) {
+                    conversationRepo.updatePeerDisplayName(conversationId, peer.displayName)
+                }
             }
 
             // Clear unread
@@ -385,10 +396,16 @@ fun ChatScreen(
             contentPadding = PaddingValues(vertical = 8.dp)
         ) {
             items(state.messages, key = { it.messageId }) { message ->
+                val senderName = if (state.isGroupChat && message.isIncoming) {
+                    state.groupMembers.find { it.nodeId == message.senderNodeId }?.displayName
+                        ?: message.senderNodeId.take(8)
+                } else null
+
                 MessageBubble(
                     message = message,
                     isOutgoing = !message.isIncoming,
-                    showHopCount = state.showHopCount
+                    showHopCount = state.showHopCount,
+                    senderName = senderName
                 )
             }
         }
@@ -562,7 +579,8 @@ private fun EmojiPickerGrid(onEmojiSelected: (String) -> Unit) {
 private fun MessageBubble(
     message: MeshMessage,
     isOutgoing: Boolean,
-    showHopCount: Boolean = false
+    showHopCount: Boolean = false,
+    senderName: String? = null
 ) {
     val alignment = if (isOutgoing) Alignment.CenterEnd else Alignment.CenterStart
     val bubbleColor = if (isOutgoing) {
@@ -597,6 +615,14 @@ private fun MessageBubble(
             tonalElevation = 1.dp
         ) {
             Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+                if (senderName != null) {
+                    Text(
+                        text = senderName,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(modifier = Modifier.height(2.dp))
+                }
                 when (val content = message.content) {
                     is MessageContent.Text -> {
                         Text(

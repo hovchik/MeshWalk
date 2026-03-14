@@ -87,6 +87,7 @@ class CreateGroupUseCase @Inject constructor(
     private val groupRepo: GroupRepository,
     private val conversationRepo: ConversationRepository,
     private val identityRepo: IdentityRepository,
+    private val peerRepo: PeerRepository,
     private val groupControlManager: com.meshwalk.app.mesh.group.GroupControlManager
 ) {
     suspend operator fun invoke(
@@ -98,9 +99,10 @@ class CreateGroupUseCase @Inject constructor(
             ?: throw IllegalStateException("No active identity")
 
         val members = memberNodeIds.map { nodeId ->
+            val peerName = peerRepo.getPeer(nodeId)?.displayName
             GroupMember(
                 nodeId = nodeId,
-                displayName = null,
+                displayName = peerName,
                 role = if (nodeId == self.nodeId) GroupRole.ADMIN else GroupRole.MEMBER
             )
         } + GroupMember(

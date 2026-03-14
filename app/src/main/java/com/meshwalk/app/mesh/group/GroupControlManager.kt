@@ -5,6 +5,7 @@ import com.meshwalk.app.crypto.keys.KeyStorage
 import com.meshwalk.app.domain.model.*
 import com.meshwalk.app.domain.repository.ConversationRepository
 import com.meshwalk.app.domain.repository.GroupRepository
+import com.meshwalk.app.domain.repository.PeerRepository
 import com.meshwalk.app.routing.engine.MeshRoutingEngine
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -23,6 +24,7 @@ import javax.inject.Singleton
 class GroupControlManager @Inject constructor(
     private val groupRepo: GroupRepository,
     private val conversationRepo: ConversationRepository,
+    private val peerRepo: PeerRepository,
     private val groupKeyManager: GroupKeyManager,
     private val keyStorage: KeyStorage,
     private val routingEngine: MeshRoutingEngine
@@ -211,9 +213,10 @@ class GroupControlManager @Inject constructor(
             return
         }
 
+        val peerName = peerRepo.getPeer(newMemberNodeId)?.displayName
         val newMember = GroupMember(
             nodeId = newMemberNodeId,
-            displayName = null,
+            displayName = peerName,
             role = GroupRole.MEMBER
         )
         val updatedMembers = group.members + newMember
@@ -281,6 +284,21 @@ class GroupControlManager @Inject constructor(
 
         if (parsed.senderKey != null) {
             groupKeyManager.storeSenderKey(parsed.groupId, acceptorNodeId, parsed.senderKey)
+        }
+
+        // Update the acceptor's display name in the group member list if provided
+        if (parsed.senderName != null) {
+            val grp = groupRepo.getGroup(parsed.groupId)
+            if (grp != null) {
+                val updatedMembers = grp.members.map { m ->
+                    if (m.nodeId == acceptorNodeId && m.displayName == null) {
+                        m.copy(displayName = parsed.senderName)
+                    } else m
+                }
+                if (updatedMembers != grp.members) {
+                    groupRepo.updateGroup(grp.copy(members = updatedMembers))
+                }
+            }
         }
 
         // Send our sender key back to the acceptor
@@ -364,9 +382,10 @@ class GroupControlManager @Inject constructor(
 
         for (newNodeId in parsed.memberNodeIds) {
             if (group.members.none { it.nodeId == newNodeId }) {
+                val peerName = peerRepo.getPeer(newNodeId)?.displayName
                 val newMember = GroupMember(
                     nodeId = newNodeId,
-                    displayName = null,
+                    displayName = peerName,
                     role = GroupRole.MEMBER
                 )
                 groupRepo.addMember(parsed.groupId, newMember)
