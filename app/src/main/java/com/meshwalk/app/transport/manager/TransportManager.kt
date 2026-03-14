@@ -203,18 +203,23 @@ class TransportManager @Inject constructor(
                         else -> nearbyTransport
                     }
 
-                    // Update peer repository
+                    // Merge with existing peer to preserve fields set by
+                    // advertisement (e.g. publicExchangeKey) that would otherwise
+                    // be overwritten with null on repeated BLE discovery scans.
+                    val existing = peerRepository.getPeer(nodeId)
+                    val displayName = event.endpointName.takeIf { it != "MeshWalk Node" }
                     peerRepository.upsertPeer(
                         PeerNode(
                             nodeId = nodeId,
-                            displayName = event.endpointName.takeIf { it != "MeshWalk Node" },
-                            identityType = com.meshwalk.app.domain.model.IdentityType.NAMED,
-                            publicSigningKey = null,
-                            publicExchangeKey = null,
+                            displayName = displayName ?: existing?.displayName,
+                            identityType = existing?.identityType
+                                ?: com.meshwalk.app.domain.model.IdentityType.NAMED,
+                            publicSigningKey = existing?.publicSigningKey,
+                            publicExchangeKey = existing?.publicExchangeKey,
                             connectionType = event.transportType,
                             hopCount = 0,
-                            signalStrength = event.signalStrength,
-                            isConnected = false
+                            signalStrength = event.signalStrength ?: existing?.signalStrength,
+                            isConnected = existing?.isConnected ?: false
                         )
                     )
                 }
