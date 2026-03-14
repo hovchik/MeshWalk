@@ -62,17 +62,24 @@ class MessageEnvelopeManager @Inject constructor(
         // Encrypt with AES-256-GCM
         val ciphertext = encryptAesGcm(plaintext, messageKey, nonce, buildAad(senderNodeId, recipientNodeId, counter))
 
+        // Prepend the 4-byte counter to the ciphertext so the receiver can derive
+        // the correct message key and AAD for decryption.
+        val counterPrefixedPayload = ByteBuffer.allocate(4 + ciphertext.size)
+            .putInt(counter)
+            .put(ciphertext)
+            .array()
+
         // Sign the packet (header fields + ciphertext)
         val signingKey = KeyFactory.getInstance("EC")
             .generatePrivate(PKCS8EncodedKeySpec(signingPrivateKey))
-        val dataToSign = buildSignatureInput(senderNodeId, recipientNodeId, ciphertext, nonce)
+        val dataToSign = buildSignatureInput(senderNodeId, recipientNodeId, counterPrefixedPayload, nonce)
         val signature = keyManager.sign(dataToSign, signingKey)
 
         return MeshPacket(
             sourceNodeId = senderNodeId,
             destinationNodeId = recipientNodeId,
             packetType = PacketType.MESSAGE,
-            encryptedPayload = ciphertext,
+            encryptedPayload = counterPrefixedPayload,
             nonce = nonce,
             senderSignature = signature,
             flags = MeshPacket.FLAG_ACK_REQUESTED
@@ -89,16 +96,21 @@ class MessageEnvelopeManager @Inject constructor(
         return try {
             val sessionId = buildSessionId(ourNodeId, packet.sourceNodeId)
 
-            // Derive the receiving key for this message
-            // Counter is embedded in the encrypted payload metadata
-            val messageKey = sessionManager.deriveReceivingKey(sessionId, 0) // Simplified
+            // Extract the 4-byte counter prefix from the payload
+            val payloadBuffer = ByteBuffer.wrap(packet.encryptedPayload)
+            val counter = payloadBuffer.getInt()
+            val ciphertext = ByteArray(payloadBuffer.remaining()).also { payloadBuffer.get(it) }
 
-            // Decrypt
+            // Derive the receiving key for this message's counter,
+            // ratcheting the chain forward as needed
+            val messageKey = sessionManager.deriveReceivingKey(sessionId, counter)
+
+            // Decrypt using the actual counter for AAD
             val plaintext = decryptAesGcm(
-                packet.encryptedPayload,
+                ciphertext,
                 messageKey,
                 packet.nonce,
-                buildAad(packet.sourceNodeId, ourNodeId, 0)
+                buildAad(packet.sourceNodeId, ourNodeId, counter)
             )
 
             // Deserialize
@@ -146,6 +158,29 @@ class MessageEnvelopeManager @Inject constructor(
             senderSignature = signature,
             flags = MeshPacket.FLAG_ACK_REQUESTED or MeshPacket.FLAG_GROUP_MESSAGE
         )
+    }
+
+    /**
+     * Decrypt a received group MeshPacket into a MeshMessage.
+     * Uses the sender's group key from GroupKeyManager.
+     */
+    fun decryptForGroup(
+        packet: MeshPacket,
+        groupId: String,
+        receivingKey: SecretKey
+    ): MeshMessage? {
+        return try {
+            val plaintext = decryptAesGcm(
+                packet.encryptedPayload,
+                receivingKey,
+                packet.nonce,
+                buildAad(packet.sourceNodeId, groupId, 0)
+            )
+            deserializeMessage(plaintext, packet)
+        } catch (e: Exception) {
+            Timber.e(e, "Failed to decrypt group message from ${packet.sourceNodeId}")
+            null
+        }
     }
 
     // -- AES-GCM operations --

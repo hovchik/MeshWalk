@@ -66,7 +66,7 @@ class BleDiscoveryTransport @Inject constructor(
                 ?.getServiceData(ParcelUuid(MESH_SERVICE_UUID))
 
             if (serviceData != null) {
-                val advert = NodeAdvertisement.deserialize(serviceData)
+                val advert = NodeAdvertisement.deserializeBle(serviceData)
                 _events.tryEmit(
                     TransportEvent.EndpointDiscovered(
                         endpointId = "ble_${device.address}",
@@ -102,7 +102,7 @@ class BleDiscoveryTransport @Inject constructor(
             val data = AdvertiseData.Builder()
                 .setIncludeDeviceName(false)
                 .addServiceUuid(ParcelUuid(MESH_SERVICE_UUID))
-                .addServiceData(ParcelUuid(MESH_SERVICE_UUID), nodeInfo.serialize().take(24).toByteArray())
+                .addServiceData(ParcelUuid(MESH_SERVICE_UUID), nodeInfo.serializeBle())
                 .build()
 
             bleAdvertiser?.startAdvertising(settings, data, object : AdvertiseCallback() {

@@ -115,7 +115,8 @@ data class NodeAdvertisement(
     val protocolVersion: Int = 1
 ) {
     /**
-     * Serialize to a compact format for BLE/Nearby advertisement.
+     * Serialize to a compact format for data channel exchange.
+     * NOT suitable for BLE advertising (too large). Use [serializeBle] for BLE.
      */
     fun serialize(): ByteArray {
         val nameBytes = (displayName ?: "anonymous").toByteArray(Charsets.UTF_8)
@@ -130,6 +131,25 @@ data class NodeAdvertisement(
         buffer.put(nameBytes)
         buffer.putInt(publicExchangeKey.size)
         buffer.put(publicExchangeKey)
+        return buffer.array()
+    }
+
+    /**
+     * Compact BLE serialization that fits in ~24 bytes of service data.
+     * Format: [version:1][nodeIdHash:8][namePrefix:up to 15]
+     * The nodeId hash is the first 8 bytes of SHA-256, enough for unique identification
+     * during BLE discovery. Full identity exchange happens after Nearby connection.
+     */
+    fun serializeBle(): ByteArray {
+        val digest = java.security.MessageDigest.getInstance("SHA-256")
+        val nodeIdHash = digest.digest(nodeId.toByteArray(Charsets.UTF_8)).take(8).toByteArray()
+        val nameBytes = (displayName ?: "anon").toByteArray(Charsets.UTF_8)
+        val nameTruncated = nameBytes.take(15).toByteArray()
+
+        val buffer = java.nio.ByteBuffer.allocate(1 + 8 + nameTruncated.size)
+        buffer.put(protocolVersion.toByte())
+        buffer.put(nodeIdHash)
+        buffer.put(nameTruncated)
         return buffer.array()
     }
 
@@ -148,6 +168,29 @@ data class NodeAdvertisement(
                     nodeId = String(idBytes, Charsets.UTF_8),
                     displayName = String(nameBytes, Charsets.UTF_8).takeIf { it != "anonymous" },
                     publicExchangeKey = keyBytes
+                )
+            } catch (e: Exception) {
+                null
+            }
+        }
+
+        /**
+         * Deserialize BLE compact format.
+         * Returns a partial NodeAdvertisement with a hashed nodeId (for BLE-only identification).
+         */
+        fun deserializeBle(data: ByteArray): NodeAdvertisement? {
+            return try {
+                if (data.size < 9) return null
+                val buffer = java.nio.ByteBuffer.wrap(data)
+                val version = buffer.get().toInt()
+                val nodeIdHash = ByteArray(8).also { buffer.get(it) }
+                val nameBytes = ByteArray(buffer.remaining()).also { buffer.get(it) }
+
+                NodeAdvertisement(
+                    nodeId = "ble_${nodeIdHash.joinToString("") { "%02x".format(it) }}",
+                    displayName = String(nameBytes, Charsets.UTF_8).takeIf { it != "anon" },
+                    publicExchangeKey = ByteArray(0),
+                    protocolVersion = version
                 )
             } catch (e: Exception) {
                 null

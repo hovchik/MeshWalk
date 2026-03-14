@@ -12,14 +12,38 @@ import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import com.meshwalk.app.MainActivity
 import com.meshwalk.app.R
+import com.meshwalk.app.domain.repository.IdentityRepository
+import com.meshwalk.app.mesh.inbox.MeshInbox
+import com.meshwalk.app.routing.engine.MeshRoutingEngine
+import com.meshwalk.app.transport.api.NodeAdvertisement
+import com.meshwalk.app.transport.manager.TransportManager
 import dagger.hilt.android.AndroidEntryPoint
+import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
+import timber.log.Timber
+import javax.inject.Inject
 
 @AndroidEntryPoint
 class MeshForegroundService : Service() {
 
+    @Inject lateinit var transportManager: TransportManager
+    @Inject lateinit var routingEngine: MeshRoutingEngine
+    @Inject lateinit var identityRepository: IdentityRepository
+    @Inject lateinit var meshInbox: MeshInbox
+
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var meshStarted = false
+
     companion object {
         const val CHANNEL_ID = "mesh_service_channel"
         const val NOTIFICATION_ID = 1
+
+        private val _isRunning = MutableStateFlow(false)
+        val isRunning: StateFlow<Boolean> = _isRunning.asStateFlow()
 
         fun startIntent(context: Context): Intent {
             return Intent(context, MeshForegroundService::class.java)
@@ -33,12 +57,50 @@ class MeshForegroundService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startForeground(NOTIFICATION_ID, buildNotification())
+        _isRunning.value = true
+
+        if (!meshStarted) {
+            serviceScope.launch {
+                // Wait for identity to become available (user may still be in onboarding)
+                Timber.d("Waiting for active identity...")
+                val identity = identityRepository.observeActiveIdentity()
+                    .filterNotNull()
+                    .first()
+
+                Timber.d("Identity available: ${identity.nodeId}, starting mesh")
+
+                val advertisement = NodeAdvertisement(
+                    nodeId = identity.nodeId,
+                    displayName = identity.displayName,
+                    publicExchangeKey = identity.publicExchangeKey,
+                    capabilities = setOf("relay", "store-forward"),
+                    protocolVersion = 1
+                )
+
+                routingEngine.start(identity.nodeId)
+                meshInbox.start(identity.nodeId, serviceScope)
+                transportManager.startMesh(advertisement)
+                meshStarted = true
+                Timber.d("Mesh started for node ${identity.nodeId}")
+            }
+        }
+
         return START_STICKY
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
+        if (meshStarted) {
+            runBlocking {
+                transportManager.stopMesh()
+                routingEngine.stop()
+            }
+            meshStarted = false
+            Timber.d("Mesh stopped")
+        }
+        serviceScope.cancel()
+        _isRunning.value = false
         super.onDestroy()
     }
 

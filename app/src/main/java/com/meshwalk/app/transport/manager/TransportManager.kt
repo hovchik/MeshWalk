@@ -36,6 +36,11 @@ class TransportManager @Inject constructor(
     private val peerRepository: PeerRepository
 ) : TransportManagerPort {
 
+    companion object {
+        /** Magic byte prefix to distinguish advertisement payloads from regular mesh packets. */
+        const val ADVERTISEMENT_MAGIC: Byte = 0x4D // 'M' for MeshWalk advertisement
+    }
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var currentAdvertisement: NodeAdvertisement? = null
 
@@ -45,11 +50,11 @@ class TransportManager @Inject constructor(
     )
     val transportEvents: SharedFlow<TransportEvent> = _transportEvents
 
-    // Endpoint to transport mapping
-    private val endpointTransportMap = mutableMapOf<String, MeshTransport>()
+    // Endpoint to transport mapping (accessed from multiple coroutines)
+    private val endpointTransportMap = java.util.concurrent.ConcurrentHashMap<String, MeshTransport>()
 
     // NodeId to endpointId mapping (across transports)
-    private val nodeEndpointMap = mutableMapOf<String, String>()
+    private val nodeEndpointMap = java.util.concurrent.ConcurrentHashMap<String, String>()
 
     init {
         // Merge events from all transports
@@ -58,8 +63,10 @@ class TransportManager @Inject constructor(
                 nearbyTransport.discoveredEndpoints,
                 bleTransport.discoveredEndpoints
             ).collect { event ->
-                handleTransportEvent(event)
-                _transportEvents.emit(event)
+                val consumed = handleTransportEvent(event)
+                if (!consumed) {
+                    _transportEvents.emit(event)
+                }
             }
         }
     }
@@ -182,7 +189,11 @@ class TransportManager @Inject constructor(
 
     // -- Event handling --
 
-    private suspend fun handleTransportEvent(event: TransportEvent) {
+    /**
+     * Handle a transport event. Returns true if the event was consumed
+     * and should NOT be forwarded to the routing layer.
+     */
+    private suspend fun handleTransportEvent(event: TransportEvent): Boolean {
         when (event) {
             is TransportEvent.EndpointDiscovered -> {
                 event.nodeId?.let { nodeId ->
@@ -192,18 +203,23 @@ class TransportManager @Inject constructor(
                         else -> nearbyTransport
                     }
 
-                    // Update peer repository
+                    // Merge with existing peer to preserve fields set by
+                    // advertisement (e.g. publicExchangeKey) that would otherwise
+                    // be overwritten with null on repeated BLE discovery scans.
+                    val existing = peerRepository.getPeer(nodeId)
+                    val displayName = event.endpointName.takeIf { it != "MeshWalk Node" }
                     peerRepository.upsertPeer(
                         PeerNode(
                             nodeId = nodeId,
-                            displayName = event.endpointName.takeIf { it != "MeshWalk Node" },
-                            identityType = com.meshwalk.app.domain.model.IdentityType.NAMED,
-                            publicSigningKey = null,
-                            publicExchangeKey = null,
+                            displayName = displayName ?: existing?.displayName,
+                            identityType = existing?.identityType
+                                ?: com.meshwalk.app.domain.model.IdentityType.NAMED,
+                            publicSigningKey = existing?.publicSigningKey,
+                            publicExchangeKey = existing?.publicExchangeKey,
                             connectionType = event.transportType,
                             hopCount = 0,
-                            signalStrength = event.signalStrength,
-                            isConnected = false
+                            signalStrength = event.signalStrength ?: existing?.signalStrength,
+                            isConnected = existing?.isConnected ?: false
                         )
                     )
                 }
@@ -211,8 +227,48 @@ class TransportManager @Inject constructor(
 
             is TransportEvent.Connected -> {
                 event.nodeId?.let { nodeId ->
-                    peerRepository.getPeer(nodeId)?.let { peer ->
+                    // For incoming connections, EndpointDiscovered may not have fired,
+                    // so ensure the endpoint mapping exists before sending the advertisement.
+                    if (!nodeEndpointMap.containsKey(nodeId)) {
+                        nodeEndpointMap[nodeId] = event.endpointId
+                        endpointTransportMap[event.endpointId] = nearbyTransport
+                    }
+
+                    // Ensure the peer exists in the repository (may be missing for
+                    // incoming connections where EndpointDiscovered was never emitted).
+                    val peer = peerRepository.getPeer(nodeId)
+                    if (peer != null) {
                         peerRepository.upsertPeer(peer.copy(isConnected = true))
+                    } else {
+                        peerRepository.upsertPeer(
+                            PeerNode(
+                                nodeId = nodeId,
+                                displayName = null,
+                                identityType = com.meshwalk.app.domain.model.IdentityType.NAMED,
+                                publicSigningKey = null,
+                                publicExchangeKey = null,
+                                connectionType = ConnectionType.NEARBY_CONNECTIONS,
+                                hopCount = 0,
+                                signalStrength = null,
+                                isConnected = true
+                            )
+                        )
+                    }
+
+                    // Send our advertisement to the newly connected peer so they get
+                    // our publicExchangeKey (needed for session establishment).
+                    currentAdvertisement?.let { advert ->
+                        val endpointId = nodeEndpointMap[nodeId] ?: return@let
+                        val transport = endpointTransportMap[endpointId] ?: return@let
+                        val advertData = advert.serialize()
+                        // Prefix with a magic byte to distinguish from regular packets
+                        val payload = ByteArray(1 + advertData.size)
+                        payload[0] = ADVERTISEMENT_MAGIC
+                        advertData.copyInto(payload, 1)
+                        transport.sendData(endpointId, payload).onFailure {
+                            Timber.w("Failed to send advertisement to $nodeId")
+                        }
+                        Timber.d("Sent advertisement to $nodeId (exchangeKey included)")
                     }
                 }
             }
@@ -234,8 +290,50 @@ class TransportManager @Inject constructor(
                 endpointTransportMap.remove(event.endpointId)
             }
 
+            is TransportEvent.DataReceived -> {
+                // Check if this is an advertisement payload (magic byte prefix)
+                if (event.data.isNotEmpty() && event.data[0] == ADVERTISEMENT_MAGIC) {
+                    val advertData = event.data.copyOfRange(1, event.data.size)
+                    try {
+                        val advert = NodeAdvertisement.deserialize(advertData)
+                        if (advert != null) {
+                            val existingPeer = peerRepository.getPeer(advert.nodeId)
+                            if (existingPeer != null) {
+                                peerRepository.upsertPeer(
+                                    existingPeer.copy(
+                                        publicExchangeKey = advert.publicExchangeKey,
+                                        displayName = advert.displayName ?: existingPeer.displayName
+                                    )
+                                )
+                            } else {
+                                // Peer record may be missing for incoming connections
+                                // where EndpointDiscovered was never emitted.
+                                peerRepository.upsertPeer(
+                                    PeerNode(
+                                        nodeId = advert.nodeId,
+                                        displayName = advert.displayName,
+                                        identityType = com.meshwalk.app.domain.model.IdentityType.NAMED,
+                                        publicSigningKey = null,
+                                        publicExchangeKey = advert.publicExchangeKey,
+                                        connectionType = ConnectionType.NEARBY_CONNECTIONS,
+                                        hopCount = 0,
+                                        signalStrength = null,
+                                        isConnected = true
+                                    )
+                                )
+                            }
+                            Timber.d("Updated peer ${advert.nodeId.take(8)} with exchange key from advertisement")
+                        }
+                    } catch (e: Exception) {
+                        Timber.w(e, "Failed to parse advertisement from ${event.endpointId}")
+                    }
+                    return true // Consumed: don't forward advertisement to routing layer
+                }
+            }
+
             else -> { /* handled by routing layer */ }
         }
+        return false
     }
 
     // -- Packet serialization --

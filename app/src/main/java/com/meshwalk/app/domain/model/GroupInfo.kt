@@ -53,3 +53,23 @@ enum class MembershipChangeType {
     GROUP_CREATED,
     GROUP_DISSOLVED
 }
+
+/**
+ * A pending group invitation received from another node.
+ */
+data class GroupInvitation(
+    val groupId: String,
+    val groupName: String,
+    val inviterNodeId: String,
+    val inviterName: String?,
+    val groupType: ConversationType,
+    val memberCount: Int,
+    val memberNodeIds: List<String> = emptyList(),
+    val receivedAt: Long = System.currentTimeMillis()
+)
+
+enum class InviteStatus {
+    PENDING,
+    ACCEPTED,
+    REJECTED
+}

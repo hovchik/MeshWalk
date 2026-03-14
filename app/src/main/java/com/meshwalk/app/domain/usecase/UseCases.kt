@@ -73,12 +73,11 @@ class SendGroupMessageUseCase @Inject constructor(
         messageRepo.saveMessage(message)
         conversationRepo.updateLastMessage(groupId, text, message.timestamp)
 
-        // Fan-out: enqueue message for each group member
-        group.members
+        // Fan-out: enqueue the same encrypted message for each group member
+        val recipientNodeIds = group.members
             .filter { it.nodeId != senderNodeId }
-            .forEach { member ->
-                meshOutbox.enqueueGroupMessage(message, member.nodeId, groupId)
-            }
+            .map { it.nodeId }
+        meshOutbox.enqueueGroupMessage(message, recipientNodeIds, groupId)
 
         return message
     }
@@ -87,7 +86,8 @@ class SendGroupMessageUseCase @Inject constructor(
 class CreateGroupUseCase @Inject constructor(
     private val groupRepo: GroupRepository,
     private val conversationRepo: ConversationRepository,
-    private val identityRepo: IdentityRepository
+    private val identityRepo: IdentityRepository,
+    private val groupControlManager: com.meshwalk.app.mesh.group.GroupControlManager
 ) {
     suspend operator fun invoke(
         name: String,
@@ -126,6 +126,10 @@ class CreateGroupUseCase @Inject constructor(
                 participants = members.map { it.nodeId }
             )
         )
+
+        // Send invitations to all members
+        groupControlManager.sendInvitations(group, self.nodeId)
+
         return group
     }
 }
@@ -152,7 +156,7 @@ interface CryptoManagerPort {
 
 interface MeshOutboxPort {
     suspend fun enqueueMessage(message: MeshMessage, recipientNodeId: String)
-    suspend fun enqueueGroupMessage(message: MeshMessage, recipientNodeId: String, groupId: String)
+    suspend fun enqueueGroupMessage(message: MeshMessage, recipientNodeIds: List<String>, groupId: String)
 }
 
 interface TransportManagerPort {

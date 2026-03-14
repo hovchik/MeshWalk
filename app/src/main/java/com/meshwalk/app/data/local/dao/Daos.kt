@@ -24,6 +24,12 @@ interface IdentityDao {
     @Query("SELECT * FROM identities")
     suspend fun getAll(): List<IdentityEntity>
 
+    @Query("UPDATE identities SET displayName = :name WHERE nodeId = :nodeId")
+    suspend fun updateDisplayName(nodeId: String, name: String?)
+
+    @Query("UPDATE identities SET identityType = :type, displayName = :name WHERE nodeId = :nodeId")
+    suspend fun updateProfile(nodeId: String, name: String?, type: String)
+
     @Query("DELETE FROM identities WHERE nodeId = :nodeId")
     suspend fun delete(nodeId: String)
 }
@@ -36,6 +42,9 @@ interface MessageDao {
     @Query("SELECT * FROM messages WHERE conversationId = :conversationId ORDER BY timestamp ASC")
     fun observeByConversation(conversationId: String): Flow<List<MessageEntity>>
 
+    @Query("SELECT * FROM (SELECT * FROM messages WHERE conversationId = :conversationId ORDER BY timestamp DESC LIMIT :limit) ORDER BY timestamp ASC")
+    fun observeRecentByConversation(conversationId: String, limit: Int): Flow<List<MessageEntity>>
+
     @Query("UPDATE messages SET deliveryStatus = :status WHERE messageId = :messageId")
     suspend fun updateStatus(messageId: String, status: String)
 
@@ -47,6 +56,9 @@ interface MessageDao {
 
     @Query("DELETE FROM messages WHERE messageId = :messageId")
     suspend fun delete(messageId: String)
+
+    @Query("DELETE FROM messages WHERE conversationId = :conversationId")
+    suspend fun deleteByConversation(conversationId: String)
 
     @Query("DELETE FROM messages WHERE expiresAt IS NOT NULL AND expiresAt < :now")
     suspend fun deleteExpired(now: Long)
@@ -96,7 +108,7 @@ interface PeerDao {
     @Query("DELETE FROM peers WHERE nodeId = :nodeId")
     suspend fun delete(nodeId: String)
 
-    @Query("DELETE FROM peers WHERE lastSeen < :threshold")
+    @Query("DELETE FROM peers WHERE lastSeen < :threshold AND publicExchangeKey IS NULL AND publicSigningKey IS NULL")
     suspend fun pruneStale(threshold: Long)
 }
 
@@ -116,6 +128,24 @@ interface RoutingDao {
 
     @Query("DELETE FROM routing_entries WHERE lastUpdated < :threshold")
     suspend fun pruneStale(threshold: Long)
+}
+
+@Dao
+interface SenderKeyDao {
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(key: SenderKeyEntity)
+
+    @Query("SELECT * FROM sender_keys WHERE groupId = :groupId AND senderNodeId = :senderNodeId")
+    suspend fun get(groupId: String, senderNodeId: String): SenderKeyEntity?
+
+    @Query("SELECT * FROM sender_keys WHERE groupId = :groupId")
+    suspend fun getByGroup(groupId: String): List<SenderKeyEntity>
+
+    @Query("DELETE FROM sender_keys WHERE groupId = :groupId")
+    suspend fun deleteByGroup(groupId: String)
+
+    @Query("DELETE FROM sender_keys WHERE groupId = :groupId AND senderNodeId = :senderNodeId")
+    suspend fun delete(groupId: String, senderNodeId: String)
 }
 
 @Dao

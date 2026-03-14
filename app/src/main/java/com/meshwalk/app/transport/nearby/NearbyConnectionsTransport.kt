@@ -35,6 +35,7 @@ class NearbyConnectionsTransport @Inject constructor(
     companion object {
         private const val SERVICE_ID = "com.meshwalk.app.mesh"
         private val STRATEGY = Strategy.P2P_CLUSTER
+        private const val NAME_SEPARATOR = "\u001F" // Unit separator for encoding nodeId in name
     }
 
     override val transportType = ConnectionType.NEARBY_CONNECTIONS
@@ -52,10 +53,12 @@ class NearbyConnectionsTransport @Inject constructor(
         Nearby.getConnectionsClient(context)
     }
 
-    // Track endpoint -> nodeId mapping
-    private val endpointNodeMap = mutableMapOf<String, String>()
-    private val connectedEndpoints = mutableSetOf<String>()
+    // Track endpoint -> nodeId mapping (accessed from multiple callbacks)
+    private val endpointNodeMap = java.util.concurrent.ConcurrentHashMap<String, String>()
+    private val connectedEndpoints = java.util.Collections.synchronizedSet(mutableSetOf<String>())
+    private val pendingEndpoints = java.util.Collections.synchronizedSet(mutableSetOf<String>())
     private var currentAdvertisement: NodeAdvertisement? = null
+    private var ourNodeId: String? = null
 
     // -- Discovery --
 
@@ -63,21 +66,41 @@ class NearbyConnectionsTransport @Inject constructor(
         override fun onEndpointFound(endpointId: String, info: DiscoveredEndpointInfo) {
             Timber.d("Endpoint found: $endpointId, name=${info.endpointName}")
 
-            val advert = NodeAdvertisement.deserialize(info.endpointInfo)
-            if (advert != null) {
-                endpointNodeMap[endpointId] = advert.nodeId
+            // Parse nodeId and display name from encoded advertising name
+            val (displayName, nodeId) = parseEncodedName(info.endpointName)
+            if (nodeId != null) {
+                endpointNodeMap[endpointId] = nodeId
             }
 
             _events.tryEmit(
                 TransportEvent.EndpointDiscovered(
                     endpointId = endpointId,
-                    endpointName = info.endpointName,
-                    nodeId = advert?.nodeId,
+                    endpointName = displayName,
+                    nodeId = nodeId,
                     transportType = ConnectionType.NEARBY_CONNECTIONS
                 )
             )
 
-            // Auto-connect to discovered endpoints for mesh operation
+            // Skip if already connected or pending connection to this endpoint
+            if (endpointId in connectedEndpoints || endpointId in pendingEndpoints) {
+                Timber.d("Already connected/pending to $endpointId, skipping connection request")
+                return
+            }
+
+            // Skip if already connected to this nodeId via a different endpoint
+            if (nodeId != null && isNodeConnectedOrPending(nodeId)) {
+                Timber.d("Already connected/pending to node ${nodeId.take(8)}, skipping")
+                return
+            }
+
+            // Deterministic tie-breaking: only the node with the lower nodeId initiates
+            // the connection to avoid both sides racing to connect simultaneously.
+            val myNodeId = ourNodeId
+            if (myNodeId != null && nodeId != null && myNodeId > nodeId) {
+                Timber.d("Deferring connection to ${nodeId.take(8)} (they should initiate)")
+                return
+            }
+
             requestConnection(endpointId)
         }
 
@@ -92,12 +115,32 @@ class NearbyConnectionsTransport @Inject constructor(
 
     private val connectionLifecycleCallback = object : ConnectionLifecycleCallback() {
         override fun onConnectionInitiated(endpointId: String, info: ConnectionInfo) {
-            Timber.d("Connection initiated: $endpointId, name=${info.endpointName}")
+            Timber.d("Connection initiated: $endpointId, name=${info.endpointName}, isIncoming=${info.isIncomingConnection}")
+
+            // Parse nodeId from connecting peer's encoded name
+            val (displayName, nodeId) = parseEncodedName(info.endpointName)
+            if (nodeId != null && !endpointNodeMap.containsKey(endpointId)) {
+                endpointNodeMap[endpointId] = nodeId
+            }
+
+            // If we already have an active connection to this nodeId via a different
+            // endpoint, reject the new one to avoid duplicate connections.
+            if (nodeId != null) {
+                val existingEndpoint = endpointNodeMap.entries
+                    .firstOrNull { it.value == nodeId && it.key != endpointId && it.key in connectedEndpoints }
+                if (existingEndpoint != null) {
+                    Timber.d("Already connected to ${nodeId.take(8)} via ${existingEndpoint.key}, rejecting duplicate")
+                    connectionsClient.rejectConnection(endpointId)
+                    return
+                }
+            }
+
+            pendingEndpoints.add(endpointId)
 
             _events.tryEmit(
                 TransportEvent.ConnectionRequested(
                     endpointId = endpointId,
-                    endpointName = info.endpointName,
+                    endpointName = displayName,
                     authenticationDigits = info.authenticationDigits
                 )
             )
@@ -106,10 +149,12 @@ class NearbyConnectionsTransport @Inject constructor(
             connectionsClient.acceptConnection(endpointId, payloadCallback)
                 .addOnFailureListener { e ->
                     Timber.e(e, "Failed to accept connection from $endpointId")
+                    pendingEndpoints.remove(endpointId)
                 }
         }
 
         override fun onConnectionResult(endpointId: String, result: ConnectionResolution) {
+            pendingEndpoints.remove(endpointId)
             when (result.status.statusCode) {
                 ConnectionsStatusCodes.STATUS_OK -> {
                     Timber.d("Connected to: $endpointId")
@@ -139,6 +184,7 @@ class NearbyConnectionsTransport @Inject constructor(
         override fun onDisconnected(endpointId: String) {
             Timber.d("Disconnected: $endpointId")
             connectedEndpoints.remove(endpointId)
+            pendingEndpoints.remove(endpointId)
             _events.tryEmit(TransportEvent.Disconnected(endpointId))
         }
     }
@@ -177,13 +223,17 @@ class NearbyConnectionsTransport @Inject constructor(
 
     override suspend fun startAdvertising(nodeInfo: NodeAdvertisement): Result<Unit> {
         currentAdvertisement = nodeInfo
+        ourNodeId = nodeInfo.nodeId
         return suspendCancellableCoroutine { cont ->
             val options = AdvertisingOptions.Builder()
                 .setStrategy(STRATEGY)
                 .build()
 
+            // Encode nodeId in the name so discoverers can identify us
+            val encodedName = encodeAdvertisingName(nodeInfo)
+
             connectionsClient.startAdvertising(
-                nodeInfo.displayName ?: "MeshWalk Node",
+                encodedName,
                 SERVICE_ID,
                 connectionLifecycleCallback,
                 options
@@ -261,6 +311,7 @@ class NearbyConnectionsTransport @Inject constructor(
     override suspend fun disconnectAll() {
         connectionsClient.stopAllEndpoints()
         connectedEndpoints.clear()
+        pendingEndpoints.clear()
         endpointNodeMap.clear()
     }
 
@@ -269,14 +320,25 @@ class NearbyConnectionsTransport @Inject constructor(
     // -- Helpers --
 
     private fun requestConnection(endpointId: String) {
-        val name = currentAdvertisement?.displayName ?: "MeshWalk Node"
+        pendingEndpoints.add(endpointId)
+        val name = currentAdvertisement?.let { encodeAdvertisingName(it) } ?: "MeshWalk Node"
         connectionsClient.requestConnection(name, endpointId, connectionLifecycleCallback)
             .addOnSuccessListener {
                 Timber.d("Connection requested to $endpointId")
             }
             .addOnFailureListener { e ->
                 Timber.w(e, "Failed to request connection to $endpointId")
+                pendingEndpoints.remove(endpointId)
             }
+    }
+
+    /**
+     * Check if we already have a connection or pending connection to a nodeId.
+     */
+    private fun isNodeConnectedOrPending(nodeId: String): Boolean {
+        return endpointNodeMap.entries.any { (endpointId, nid) ->
+            nid == nodeId && (endpointId in connectedEndpoints || endpointId in pendingEndpoints)
+        }
     }
 
     /**
@@ -289,5 +351,26 @@ class NearbyConnectionsTransport @Inject constructor(
      */
     fun getEndpointForNodeId(nodeId: String): String? {
         return endpointNodeMap.entries.firstOrNull { it.value == nodeId }?.key
+    }
+
+    /**
+     * Encode display name and nodeId into a single string for Nearby advertising.
+     * Format: "displayName{SEPARATOR}nodeId"
+     */
+    private fun encodeAdvertisingName(advert: NodeAdvertisement): String {
+        val displayName = advert.displayName ?: "MeshWalk Node"
+        return "$displayName$NAME_SEPARATOR${advert.nodeId}"
+    }
+
+    /**
+     * Parse an encoded advertising name back into (displayName, nodeId).
+     */
+    private fun parseEncodedName(encodedName: String): Pair<String, String?> {
+        val parts = encodedName.split(NAME_SEPARATOR, limit = 2)
+        return if (parts.size == 2) {
+            Pair(parts[0], parts[1])
+        } else {
+            Pair(encodedName, null)
+        }
     }
 }
