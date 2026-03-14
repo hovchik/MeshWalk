@@ -35,6 +35,7 @@ class NearbyConnectionsTransport @Inject constructor(
     companion object {
         private const val SERVICE_ID = "com.meshwalk.app.mesh"
         private val STRATEGY = Strategy.P2P_CLUSTER
+        private const val NAME_SEPARATOR = "\u001F" // Unit separator for encoding nodeId in name
     }
 
     override val transportType = ConnectionType.NEARBY_CONNECTIONS
@@ -63,16 +64,17 @@ class NearbyConnectionsTransport @Inject constructor(
         override fun onEndpointFound(endpointId: String, info: DiscoveredEndpointInfo) {
             Timber.d("Endpoint found: $endpointId, name=${info.endpointName}")
 
-            val advert = NodeAdvertisement.deserialize(info.endpointInfo)
-            if (advert != null) {
-                endpointNodeMap[endpointId] = advert.nodeId
+            // Parse nodeId and display name from encoded advertising name
+            val (displayName, nodeId) = parseEncodedName(info.endpointName)
+            if (nodeId != null) {
+                endpointNodeMap[endpointId] = nodeId
             }
 
             _events.tryEmit(
                 TransportEvent.EndpointDiscovered(
                     endpointId = endpointId,
-                    endpointName = info.endpointName,
-                    nodeId = advert?.nodeId,
+                    endpointName = displayName,
+                    nodeId = nodeId,
                     transportType = ConnectionType.NEARBY_CONNECTIONS
                 )
             )
@@ -94,10 +96,16 @@ class NearbyConnectionsTransport @Inject constructor(
         override fun onConnectionInitiated(endpointId: String, info: ConnectionInfo) {
             Timber.d("Connection initiated: $endpointId, name=${info.endpointName}")
 
+            // Parse nodeId from connecting peer's encoded name
+            val (displayName, nodeId) = parseEncodedName(info.endpointName)
+            if (nodeId != null && !endpointNodeMap.containsKey(endpointId)) {
+                endpointNodeMap[endpointId] = nodeId
+            }
+
             _events.tryEmit(
                 TransportEvent.ConnectionRequested(
                     endpointId = endpointId,
-                    endpointName = info.endpointName,
+                    endpointName = displayName,
                     authenticationDigits = info.authenticationDigits
                 )
             )
@@ -182,8 +190,11 @@ class NearbyConnectionsTransport @Inject constructor(
                 .setStrategy(STRATEGY)
                 .build()
 
+            // Encode nodeId in the name so discoverers can identify us
+            val encodedName = encodeAdvertisingName(nodeInfo)
+
             connectionsClient.startAdvertising(
-                nodeInfo.displayName ?: "MeshWalk Node",
+                encodedName,
                 SERVICE_ID,
                 connectionLifecycleCallback,
                 options
@@ -269,7 +280,7 @@ class NearbyConnectionsTransport @Inject constructor(
     // -- Helpers --
 
     private fun requestConnection(endpointId: String) {
-        val name = currentAdvertisement?.displayName ?: "MeshWalk Node"
+        val name = currentAdvertisement?.let { encodeAdvertisingName(it) } ?: "MeshWalk Node"
         connectionsClient.requestConnection(name, endpointId, connectionLifecycleCallback)
             .addOnSuccessListener {
                 Timber.d("Connection requested to $endpointId")
@@ -289,5 +300,26 @@ class NearbyConnectionsTransport @Inject constructor(
      */
     fun getEndpointForNodeId(nodeId: String): String? {
         return endpointNodeMap.entries.firstOrNull { it.value == nodeId }?.key
+    }
+
+    /**
+     * Encode display name and nodeId into a single string for Nearby advertising.
+     * Format: "displayName{SEPARATOR}nodeId"
+     */
+    private fun encodeAdvertisingName(advert: NodeAdvertisement): String {
+        val displayName = advert.displayName ?: "MeshWalk Node"
+        return "$displayName$NAME_SEPARATOR${advert.nodeId}"
+    }
+
+    /**
+     * Parse an encoded advertising name back into (displayName, nodeId).
+     */
+    private fun parseEncodedName(encodedName: String): Pair<String, String?> {
+        val parts = encodedName.split(NAME_SEPARATOR, limit = 2)
+        return if (parts.size == 2) {
+            Pair(parts[0], parts[1])
+        } else {
+            Pair(encodedName, null)
+        }
     }
 }
