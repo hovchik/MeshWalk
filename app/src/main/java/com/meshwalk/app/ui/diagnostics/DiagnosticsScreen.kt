@@ -65,6 +65,14 @@ class DiagnosticsViewModel @Inject constructor(
                         "DEDUP ${event.packetId.take(8)}"
                     is RoutingDiagnosticEvent.RouteMaintenance ->
                         "MAINTENANCE routes=${event.routeCount} queued=${event.queuedPackets}"
+                    is RoutingDiagnosticEvent.QueueFlushScheduled ->
+                        "QUEUE_FLUSH scheduled attempt ${event.attempt}/${event.maxAttempts} in ${event.delayMs}ms (${event.queuedCount} queued)"
+                    is RoutingDiagnosticEvent.QueueFlushCompleted ->
+                        "QUEUE_FLUSH attempt ${event.attempt} sent=${event.sentCount} remaining=${event.remainingCount}"
+                    is RoutingDiagnosticEvent.QueueDrained ->
+                        "QUEUE_DRAINED after ${event.totalAttempts} attempts"
+                    is RoutingDiagnosticEvent.QueueFlushGaveUp ->
+                        "QUEUE_GAVE_UP after ${event.totalAttempts} attempts (${event.remainingCount} remaining)"
                 }
                 eventLog.add(0, "${TimeUtils.formatTimestamp(System.currentTimeMillis())} $text")
                 if (eventLog.size > 100) eventLog.removeAt(eventLog.lastIndex)

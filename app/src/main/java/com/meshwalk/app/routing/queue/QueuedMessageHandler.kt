@@ -50,7 +50,7 @@ class QueuedMessageHandler @Inject constructor(
      * Starts the Fibonacci retry cycle if not already running.
      */
     fun onMessageQueued() {
-        if (flushJob?.isFlushActive == true) {
+        if (flushJob?.isActive == true) {
             Timber.d("Queue flush cycle already running")
             return
         }
