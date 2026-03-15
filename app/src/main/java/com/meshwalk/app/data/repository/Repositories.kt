@@ -122,6 +122,14 @@ class MessageRepositoryImpl @Inject constructor(
     override suspend fun getMessageById(messageId: String): MeshMessage? {
         return messageDao.getById(messageId)?.toDomain()
     }
+
+    override suspend fun getFailedMessagesForPeer(peerNodeId: String): List<MeshMessage> {
+        return messageDao.getFailedForPeer(peerNodeId).map { it.toDomain() }
+    }
+
+    override suspend fun getStalePendingMessagesForPeer(peerNodeId: String, staleBefore: Long): List<MeshMessage> {
+        return messageDao.getStalePendingForPeer(peerNodeId, staleBefore).map { it.toDomain() }
+    }
 }
 
 // ============================================================

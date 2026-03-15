@@ -15,7 +15,9 @@ data class MeshMessage(
     val deliveryStatus: DeliveryStatus = DeliveryStatus.PENDING,
     val isIncoming: Boolean,
     val hopCount: Int = 0,
-    val expiresAt: Long? = null
+    val expiresAt: Long? = null,
+    /** True when the message was received significantly later than it was sent (offline resend). */
+    val isDelayed: Boolean = false
 )
 
 sealed interface MessageContent {

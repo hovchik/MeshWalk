@@ -33,7 +33,8 @@ import javax.inject.Singleton
 class TransportManager @Inject constructor(
     private val nearbyTransport: NearbyConnectionsTransport,
     private val bleTransport: BleDiscoveryTransport,
-    private val peerRepository: PeerRepository
+    private val peerRepository: PeerRepository,
+    private val reconnectManager: ReconnectManager
 ) : TransportManagerPort {
 
     companion object {
@@ -69,6 +70,36 @@ class TransportManager @Inject constructor(
                 }
             }
         }
+
+        // Wire up reconnect: restart discovery/advertising when a reconnect attempt fires
+        reconnectManager.onReconnectAttempt = {
+            Timber.d("Reconnect attempt: restarting discovery and advertising")
+            restartDiscoveryAndAdvertising()
+        }
+
+        // Forward reconnect events for observability and emit transport events
+        scope.launch {
+            reconnectManager.reconnectEvents.collect { event ->
+                when (event) {
+                    is ReconnectEvent.Reconnected ->
+                        Timber.d("Peer ${event.nodeId.take(8)} reconnected")
+                    is ReconnectEvent.GaveUp ->
+                        Timber.w("Gave up reconnecting to ${event.nodeId.take(8)} after ${event.totalAttempts} attempts")
+                    is ReconnectEvent.Scheduled ->
+                        Timber.d("Reconnect scheduled for ${event.nodeId.take(8)} in ${event.delayMs}ms (attempt ${event.attempt})")
+                    is ReconnectEvent.Attempting -> {
+                        Timber.d("Reconnect attempt ${event.attempt} for ${event.nodeId.take(8)}")
+                        _transportEvents.emit(
+                            TransportEvent.Reconnecting(
+                                nodeId = event.nodeId,
+                                attempt = event.attempt,
+                                maxAttempts = 5
+                            )
+                        )
+                    }
+                }
+            }
+        }
     }
 
     /**
@@ -84,6 +115,7 @@ class TransportManager @Inject constructor(
      * Stop all mesh activity.
      */
     suspend fun stopMesh() {
+        reconnectManager.cancelAll()
         stopAdvertising()
         stopDiscovery()
         nearbyTransport.disconnectAll()
@@ -165,19 +197,25 @@ class TransportManager @Inject constructor(
     /**
      * Broadcast a packet to all directly connected peers.
      * Used for flooding-based routing or discovery announcements.
+     *
+     * @return the number of peers the packet was successfully sent to.
      */
-    suspend fun broadcastPacket(packet: MeshPacket, excludeNodeId: String? = null) {
+    suspend fun broadcastPacket(packet: MeshPacket, excludeNodeId: String? = null): Int {
         val serialized = serializePacket(packet)
         val connected = nearbyTransport.getConnectedEndpoints()
+        var successCount = 0
 
         connected.forEach { endpointId ->
             val nodeId = nearbyTransport.getNodeIdForEndpoint(endpointId)
             if (nodeId != excludeNodeId) {
-                nearbyTransport.sendData(endpointId, serialized).onFailure {
+                nearbyTransport.sendData(endpointId, serialized).onSuccess {
+                    successCount++
+                }.onFailure {
                     Timber.w("Failed to broadcast to $endpointId")
                 }
             }
         }
+        return successCount
     }
 
     /**
@@ -185,6 +223,13 @@ class TransportManager @Inject constructor(
      */
     fun getConnectedNodeIds(): Set<String> {
         return nodeEndpointMap.keys.toSet()
+    }
+
+    /**
+     * Resolve an endpoint ID to a node ID.
+     */
+    fun getNodeIdForEndpoint(endpointId: String): String? {
+        return nearbyTransport.getNodeIdForEndpoint(endpointId)
     }
 
     // -- Event handling --
@@ -227,6 +272,9 @@ class TransportManager @Inject constructor(
 
             is TransportEvent.Connected -> {
                 event.nodeId?.let { nodeId ->
+                    // Clear any pending reconnect attempts for this peer
+                    reconnectManager.onPeerConnected(nodeId)
+
                     // For incoming connections, EndpointDiscovered may not have fired,
                     // so ensure the endpoint mapping exists before sending the advertisement.
                     if (!nodeEndpointMap.containsKey(nodeId)) {
@@ -280,6 +328,8 @@ class TransportManager @Inject constructor(
                     peerRepository.getPeer(it)?.let { peer ->
                         peerRepository.upsertPeer(peer.copy(isConnected = false))
                     }
+                    // Schedule reconnection attempts for the lost peer
+                    reconnectManager.onPeerDisconnected(it)
                 }
                 endpointTransportMap.remove(event.endpointId)
             }
@@ -334,6 +384,41 @@ class TransportManager @Inject constructor(
             else -> { /* handled by routing layer */ }
         }
         return false
+    }
+
+    /**
+     * Restart discovery and advertising to re-establish lost connections.
+     * Called by the ReconnectManager during reconnection attempts.
+     */
+    private suspend fun restartDiscoveryAndAdvertising() {
+        // Stop and restart discovery to trigger fresh endpoint scanning
+        nearbyTransport.stopDiscovery()
+        nearbyTransport.startDiscovery().onFailure {
+            Timber.w(it, "Reconnect: Nearby discovery restart failed")
+        }
+
+        // Restart advertising so disconnected peers can find us
+        val advert = currentAdvertisement
+        if (advert != null) {
+            nearbyTransport.stopAdvertising()
+            nearbyTransport.startAdvertising(advert).onFailure {
+                Timber.w(it, "Reconnect: Nearby advertising restart failed")
+            }
+        }
+
+        // Also restart BLE if available
+        if (bleTransport.isAvailable) {
+            bleTransport.stopDiscovery()
+            bleTransport.startDiscovery().onFailure {
+                Timber.w(it, "Reconnect: BLE discovery restart failed")
+            }
+            if (advert != null) {
+                bleTransport.stopAdvertising()
+                bleTransport.startAdvertising(advert).onFailure {
+                    Timber.w(it, "Reconnect: BLE advertising restart failed")
+                }
+            }
+        }
     }
 
     // -- Packet serialization --

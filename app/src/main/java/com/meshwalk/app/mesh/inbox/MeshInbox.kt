@@ -13,6 +13,7 @@ import com.meshwalk.app.domain.repository.PeerRepository
 import com.meshwalk.app.mesh.group.GroupControlManager
 import com.meshwalk.app.routing.engine.MeshRoutingEngine
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import timber.log.Timber
 import java.nio.ByteBuffer
@@ -37,8 +38,14 @@ class MeshInbox @Inject constructor(
     private val groupControlManager: GroupControlManager,
     private val sessionManager: SessionManager,
     private val keyStorage: KeyStorage,
-    private val peerRepo: PeerRepository
+    private val peerRepo: PeerRepository,
+    private val notificationManager: MessageNotificationManager
 ) {
+
+    companion object {
+        /** If a message arrives more than 30 seconds after it was sent, mark it as delayed. */
+        private const val DELAYED_THRESHOLD_MS = 30_000L
+    }
 
     fun start(ourNodeId: String, scope: CoroutineScope) {
         scope.launch {
@@ -83,9 +90,11 @@ class MeshInbox @Inject constructor(
         val senderPeer = peerRepo.getPeer(packet.sourceNodeId)
         val conversation = conversationRepo.getOrCreateDirectConversation(packet.sourceNodeId, senderPeer?.displayName)
 
+        val isDelayed = System.currentTimeMillis() - message.timestamp > DELAYED_THRESHOLD_MS
         val localMessage = message.copy(
             conversationId = conversation.conversationId,
-            deliveryStatus = DeliveryStatus.DELIVERED
+            deliveryStatus = DeliveryStatus.DELIVERED,
+            isDelayed = isDelayed
         )
 
         if (messageRepo.getMessageById(localMessage.messageId) != null) {
@@ -102,6 +111,14 @@ class MeshInbox @Inject constructor(
         conversationRepo.updateLastMessage(conversation.conversationId, preview, localMessage.timestamp)
         conversationRepo.incrementUnread(conversation.conversationId)
 
+        val senderName = senderPeer?.displayName ?: packet.sourceNodeId.take(8)
+        notificationManager.showMessageNotification(
+            conversationId = conversation.conversationId,
+            senderName = senderName,
+            messagePreview = preview,
+            isGroupMessage = false
+        )
+
         Timber.d("Received direct message from ${packet.sourceNodeId.take(8)}: ${preview.take(30)}")
     }
 
@@ -117,9 +134,20 @@ class MeshInbox @Inject constructor(
             return
         }
 
-        val peer = peerRepo.getPeer(peerNodeId)
-        val peerExchangeKey = peer?.publicExchangeKey ?: run {
-            Timber.w("No exchange public key for ${peerNodeId.take(8)}, cannot establish session")
+        // The peer's exchange key arrives asynchronously via the advertisement
+        // payload sent right after connection. Wait briefly for it to arrive
+        // rather than silently dropping the message.
+        var peerExchangeKey: ByteArray? = null
+        val deadline = System.currentTimeMillis() + 3_000L
+        while (peerExchangeKey == null && System.currentTimeMillis() < deadline) {
+            peerExchangeKey = peerRepo.getPeer(peerNodeId)?.publicExchangeKey
+            if (peerExchangeKey == null) {
+                delay(200)
+            }
+        }
+
+        if (peerExchangeKey == null) {
+            Timber.w("No exchange public key for ${peerNodeId.take(8)} after waiting, cannot establish session")
             return
         }
 
@@ -161,7 +189,11 @@ class MeshInbox @Inject constructor(
             return
         }
 
-        val localMessage = message.copy(deliveryStatus = DeliveryStatus.DELIVERED)
+        val isDelayed = System.currentTimeMillis() - message.timestamp > DELAYED_THRESHOLD_MS
+        val localMessage = message.copy(
+            deliveryStatus = DeliveryStatus.DELIVERED,
+            isDelayed = isDelayed
+        )
 
         if (messageRepo.getMessageById(localMessage.messageId) != null) {
             Timber.d("Duplicate group message ${localMessage.messageId}, skipping")
@@ -176,6 +208,15 @@ class MeshInbox @Inject constructor(
         }
         conversationRepo.updateLastMessage(localMessage.conversationId, preview, localMessage.timestamp)
         conversationRepo.incrementUnread(localMessage.conversationId)
+
+        val senderPeer = peerRepo.getPeer(packet.sourceNodeId)
+        val senderName = senderPeer?.displayName ?: packet.sourceNodeId.take(8)
+        notificationManager.showMessageNotification(
+            conversationId = localMessage.conversationId,
+            senderName = senderName,
+            messagePreview = preview,
+            isGroupMessage = true
+        )
 
         Timber.d("Received group message in ${groupId.take(8)} from ${packet.sourceNodeId.take(8)}")
     }

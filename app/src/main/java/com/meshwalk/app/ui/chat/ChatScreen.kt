@@ -36,6 +36,7 @@ import com.meshwalk.app.domain.usecase.SendMessageUseCase
 import com.meshwalk.app.mesh.group.GroupControlManager
 import com.meshwalk.app.util.TimeUtils
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -207,10 +208,13 @@ class ChatViewModel @Inject constructor(
         }
     }
 
+    private var loadPeersJob: Job? = null
+
     fun loadAvailablePeers() {
-        viewModelScope.launch {
-            val peers = peerRepo.observeNearbyPeers()
-            peers.collect { peerList ->
+        // Cancel any previous collection to prevent leaking coroutines
+        loadPeersJob?.cancel()
+        loadPeersJob = viewModelScope.launch {
+            peerRepo.observeNearbyPeers().collect { peerList ->
                 val nonMembers = peerList.filter { peer ->
                     _state.value.groupMembers.none { it.nodeId == peer.nodeId }
                 }
@@ -324,13 +328,48 @@ fun ChatScreen(
                     }
                 }
             )
-        },
-        bottomBar = {
+        }
+    ) { padding ->
+        // Use a Column with imePadding so both the message list and input bar
+        // resize correctly when the keyboard opens. The message list takes all
+        // available space (weight 1f) and the input bar sits at the bottom.
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .imePadding()
+        ) {
+            // Message list — fills available space above input bar
+            LazyColumn(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp),
+                state = listState,
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+                contentPadding = PaddingValues(vertical = 8.dp)
+            ) {
+                items(state.messages, key = { it.messageId }) { message ->
+                    val senderName = if (state.isGroupChat && message.isIncoming) {
+                        state.groupMembers.find { it.nodeId == message.senderNodeId }?.displayName
+                            ?: message.senderNodeId.take(8)
+                    } else null
+
+                    MessageBubble(
+                        message = message,
+                        isOutgoing = !message.isIncoming,
+                        showHopCount = state.showHopCount,
+                        senderName = senderName
+                    )
+                }
+            }
+
+            // Input bar — stays above keyboard
             Surface(
                 tonalElevation = 3.dp,
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Column(modifier = Modifier.imePadding()) {
+                Column {
                     Row(
                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically
@@ -383,30 +422,6 @@ fun ChatScreen(
                         })
                     }
                 }
-            }
-        }
-    ) { padding ->
-        LazyColumn(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .padding(horizontal = 12.dp),
-            state = listState,
-            verticalArrangement = Arrangement.spacedBy(4.dp),
-            contentPadding = PaddingValues(vertical = 8.dp)
-        ) {
-            items(state.messages, key = { it.messageId }) { message ->
-                val senderName = if (state.isGroupChat && message.isIncoming) {
-                    state.groupMembers.find { it.nodeId == message.senderNodeId }?.displayName
-                        ?: message.senderNodeId.take(8)
-                } else null
-
-                MessageBubble(
-                    message = message,
-                    isOutgoing = !message.isIncoming,
-                    showHopCount = state.showHopCount,
-                    senderName = senderName
-                )
             }
         }
     }
@@ -583,12 +598,16 @@ private fun MessageBubble(
     senderName: String? = null
 ) {
     val alignment = if (isOutgoing) Alignment.CenterEnd else Alignment.CenterStart
-    val bubbleColor = if (isOutgoing) {
+    val bubbleColor = if (message.isDelayed && message.isIncoming) {
+        MaterialTheme.colorScheme.tertiaryContainer
+    } else if (isOutgoing) {
         MaterialTheme.colorScheme.primary
     } else {
         MaterialTheme.colorScheme.surfaceVariant
     }
-    val textColor = if (isOutgoing) {
+    val textColor = if (message.isDelayed && message.isIncoming) {
+        MaterialTheme.colorScheme.onTertiaryContainer
+    } else if (isOutgoing) {
         MaterialTheme.colorScheme.onPrimary
     } else {
         MaterialTheme.colorScheme.onSurface
@@ -615,11 +634,30 @@ private fun MessageBubble(
             tonalElevation = 1.dp
         ) {
             Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+                if (message.isDelayed && message.isIncoming) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            Icons.Filled.Schedule,
+                            contentDescription = "Delayed message",
+                            modifier = Modifier.size(12.dp),
+                            tint = MaterialTheme.colorScheme.tertiary
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = "Delayed",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.tertiary
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(2.dp))
+                }
                 if (senderName != null) {
                     Text(
                         text = senderName,
                         style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.primary
+                        color = if (message.isDelayed && message.isIncoming)
+                            MaterialTheme.colorScheme.tertiary
+                        else MaterialTheme.colorScheme.primary
                     )
                     Spacer(modifier = Modifier.height(2.dp))
                 }

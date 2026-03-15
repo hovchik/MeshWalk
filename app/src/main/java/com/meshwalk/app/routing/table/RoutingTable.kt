@@ -76,6 +76,22 @@ class RoutingTable @Inject constructor(
     }
 
     /**
+     * Remove all routes that use a specific node as next hop.
+     * Called when that node disconnects.
+     */
+    suspend fun removeRoutesVia(nextHopNodeId: String) {
+        val affected = routes.entries.filter { it.value.nextHopNodeId == nextHopNodeId }
+        affected.forEach { (key, _) ->
+            routes.remove(key)
+            routingRepository.removeRoute(key)
+        }
+        if (affected.isNotEmpty()) {
+            _routeUpdates.value = System.currentTimeMillis()
+            Timber.d("Removed ${affected.size} routes via disconnected node ${nextHopNodeId.take(8)}")
+        }
+    }
+
+    /**
      * Build network graph snapshot for visualization.
      */
     fun buildNetworkGraph(selfNodeId: String, directPeers: List<PeerNode>): NetworkGraph {

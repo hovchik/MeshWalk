@@ -23,6 +23,8 @@ interface MessageRepository {
     suspend fun deleteMessagesByConversation(conversationId: String)
     suspend fun deleteExpiredMessages()
     suspend fun getMessageById(messageId: String): MeshMessage?
+    suspend fun getFailedMessagesForPeer(peerNodeId: String): List<MeshMessage>
+    suspend fun getStalePendingMessagesForPeer(peerNodeId: String, staleBefore: Long): List<MeshMessage>
 }
 
 interface ConversationRepository {

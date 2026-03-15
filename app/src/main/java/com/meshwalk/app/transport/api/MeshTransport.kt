@@ -97,6 +97,13 @@ sealed interface TransportEvent {
         val totalBytes: Long
     ) : TransportEvent
 
+    /** A reconnection attempt is being made for a lost peer */
+    data class Reconnecting(
+        val nodeId: String,
+        val attempt: Int,
+        val maxAttempts: Int
+    ) : TransportEvent
+
     /** Error occurred */
     data class Error(
         val endpointId: String?,
