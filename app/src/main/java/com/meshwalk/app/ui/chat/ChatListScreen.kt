@@ -157,9 +157,7 @@ private fun ConversationItem(
         ),
         headlineContent = {
             Text(
-                text = conversation.title
-                    ?: conversation.participants.firstOrNull()?.take(8)
-                    ?: "Unknown",
+                text = conversation.displayTitle,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )

@@ -89,6 +89,12 @@ interface ConversationDao {
 
     @Query("SELECT * FROM conversations WHERE type = 'DIRECT' AND participants LIKE '%' || :nodeId || '%' LIMIT 1")
     suspend fun findDirectConversation(nodeId: String): ConversationEntity?
+
+    @Query("UPDATE conversations SET peerDisplayName = :displayName WHERE conversationId = :id")
+    suspend fun updatePeerDisplayName(id: String, displayName: String)
+
+    @Query("UPDATE conversations SET title = :title WHERE conversationId = :id")
+    suspend fun updateTitle(id: String, title: String)
 }
 
 @Dao
@@ -108,7 +114,7 @@ interface PeerDao {
     @Query("DELETE FROM peers WHERE nodeId = :nodeId")
     suspend fun delete(nodeId: String)
 
-    @Query("DELETE FROM peers WHERE lastSeen < :threshold AND publicExchangeKey IS NULL AND publicSigningKey IS NULL")
+    @Query("DELETE FROM peers WHERE lastSeen < :threshold AND publicExchangeKey IS NULL AND publicSigningKey IS NULL AND displayName IS NULL")
     suspend fun pruneStale(threshold: Long)
 }
 

@@ -80,7 +80,8 @@ class MeshInbox @Inject constructor(
             return
         }
 
-        val conversation = conversationRepo.getOrCreateDirectConversation(packet.sourceNodeId)
+        val senderPeer = peerRepo.getPeer(packet.sourceNodeId)
+        val conversation = conversationRepo.getOrCreateDirectConversation(packet.sourceNodeId, senderPeer?.displayName)
 
         val localMessage = message.copy(
             conversationId = conversation.conversationId,

@@ -28,9 +28,10 @@ interface MessageRepository {
 interface ConversationRepository {
     suspend fun createConversation(conversation: Conversation): Conversation
     suspend fun getConversation(conversationId: String): Conversation?
-    suspend fun getOrCreateDirectConversation(peerNodeId: String): Conversation
+    suspend fun getOrCreateDirectConversation(peerNodeId: String, peerDisplayName: String? = null): Conversation
     fun observeConversations(): Flow<List<Conversation>>
     suspend fun updateLastMessage(conversationId: String, preview: String, timestamp: Long)
+    suspend fun updatePeerDisplayName(conversationId: String, displayName: String)
     suspend fun incrementUnread(conversationId: String)
     suspend fun clearUnread(conversationId: String)
     suspend fun deleteConversation(conversationId: String)

@@ -41,6 +41,7 @@ data class ConversationEntity(
     val type: String,
     val title: String?,
     val participants: String,  // JSON list of node IDs
+    val peerDisplayName: String?,  // cached peer name for direct conversations
     val createdAt: Long,
     val lastMessageAt: Long?,
     val lastMessagePreview: String?,

@@ -90,6 +90,19 @@ class SessionManager @Inject constructor(
         peerPublicExchangeKey: ByteArray
     ): MeshSession {
         val sessionId = createSessionId(ourNodeId, peerNodeId)
+
+        // If an existing session is already loaded (or persisted), reuse it
+        // to avoid resetting chain counters and breaking ongoing conversations.
+        activeSessions[sessionId]?.let {
+            Timber.d("Reusing existing in-memory session $sessionId")
+            return it
+        }
+        sessionStore.getSession(sessionId)?.let { stored ->
+            activeSessions[sessionId] = stored
+            Timber.d("Reusing persisted session $sessionId (send=${stored.sendCounter}, recv=${stored.receiveCounter})")
+            return stored
+        }
+
         val keyFactory = KeyFactory.getInstance("EC")
 
         val ourPrivate: PrivateKey = keyFactory.generatePrivate(
@@ -216,8 +229,23 @@ class SessionManager @Inject constructor(
         return activeSessions[createSessionId(ourNodeId, peerNodeId)]
     }
 
-    fun hasSession(ourNodeId: String, peerNodeId: String): Boolean {
-        return activeSessions.containsKey(createSessionId(ourNodeId, peerNodeId))
+    /**
+     * Check if a session exists, loading from persistent storage if needed.
+     * This ensures sessions survive app restarts without re-establishing
+     * (which would reset chain counters and break decryption).
+     */
+    suspend fun hasSession(ourNodeId: String, peerNodeId: String): Boolean {
+        val sessionId = createSessionId(ourNodeId, peerNodeId)
+        if (activeSessions.containsKey(sessionId)) return true
+
+        // Try loading from persistent store (session may exist from before app restart)
+        val stored = sessionStore.getSession(sessionId)
+        if (stored != null) {
+            activeSessions[sessionId] = stored
+            Timber.d("Restored session $sessionId from persistent store (send=${stored.sendCounter}, recv=${stored.receiveCounter})")
+            return true
+        }
+        return false
     }
 
     private fun createSessionId(nodeA: String, nodeB: String): String {

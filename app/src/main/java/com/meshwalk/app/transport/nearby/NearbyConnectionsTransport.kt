@@ -1,6 +1,9 @@
 package com.meshwalk.app.transport.nearby
 
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
+import androidx.core.content.ContextCompat
 import com.google.android.gms.nearby.Nearby
 import com.google.android.gms.nearby.connection.*
 import com.meshwalk.app.domain.model.ConnectionType
@@ -221,7 +224,17 @@ class NearbyConnectionsTransport @Inject constructor(
 
     // -- MeshTransport implementation --
 
+    private fun hasLocationPermission(): Boolean {
+        return ContextCompat.checkSelfPermission(
+            context, Manifest.permission.ACCESS_FINE_LOCATION
+        ) == PackageManager.PERMISSION_GRANTED
+    }
+
     override suspend fun startAdvertising(nodeInfo: NodeAdvertisement): Result<Unit> {
+        if (!hasLocationPermission()) {
+            Timber.w("Skipping Nearby advertising: ACCESS_FINE_LOCATION not granted")
+            return Result.failure(SecurityException("ACCESS_FINE_LOCATION permission required for Nearby Connections"))
+        }
         currentAdvertisement = nodeInfo
         ourNodeId = nodeInfo.nodeId
         return suspendCancellableCoroutine { cont ->
@@ -254,6 +267,10 @@ class NearbyConnectionsTransport @Inject constructor(
     }
 
     override suspend fun startDiscovery(): Result<Unit> {
+        if (!hasLocationPermission()) {
+            Timber.w("Skipping Nearby discovery: ACCESS_FINE_LOCATION not granted")
+            return Result.failure(SecurityException("ACCESS_FINE_LOCATION permission required for Nearby Connections"))
+        }
         return suspendCancellableCoroutine { cont ->
             val options = DiscoveryOptions.Builder()
                 .setStrategy(STRATEGY)

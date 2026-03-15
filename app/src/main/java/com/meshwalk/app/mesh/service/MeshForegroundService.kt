@@ -1,5 +1,6 @@
 package com.meshwalk.app.mesh.service
 
+import android.Manifest
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -7,9 +8,11 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import com.meshwalk.app.MainActivity
 import com.meshwalk.app.R
 import com.meshwalk.app.domain.repository.IdentityRepository
@@ -61,6 +64,13 @@ class MeshForegroundService : Service() {
 
         if (!meshStarted) {
             serviceScope.launch {
+                // Check minimum permissions before starting mesh.
+                // Each transport also checks its own permissions before calling
+                // platform APIs, so partial permission grants are handled gracefully.
+                if (!hasMinimumPermissions()) {
+                    Timber.w("Mesh service started without required permissions; transports will check individually")
+                }
+
                 // Wait for identity to become available (user may still be in onboarding)
                 Timber.d("Waiting for active identity...")
                 val identity = identityRepository.observeActiveIdentity()
@@ -102,6 +112,12 @@ class MeshForegroundService : Service() {
         serviceScope.cancel()
         _isRunning.value = false
         super.onDestroy()
+    }
+
+    private fun hasMinimumPermissions(): Boolean {
+        return ContextCompat.checkSelfPermission(
+            this, Manifest.permission.ACCESS_FINE_LOCATION
+        ) == PackageManager.PERMISSION_GRANTED
     }
 
     private fun createNotificationChannel() {

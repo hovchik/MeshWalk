@@ -32,7 +32,7 @@ object DatabaseModule {
             MeshWalkDatabase::class.java,
             MeshWalkDatabase.DATABASE_NAME
         )
-            .addMigrations(MeshWalkDatabase.MIGRATION_1_2, MeshWalkDatabase.MIGRATION_2_3)
+            .addMigrations(MeshWalkDatabase.MIGRATION_1_2, MeshWalkDatabase.MIGRATION_2_3, MeshWalkDatabase.MIGRATION_3_4)
             .fallbackToDestructiveMigration()
             .build()
     }

@@ -33,9 +33,9 @@ class PeersViewModel @Inject constructor(
     val peers: StateFlow<List<PeerNode>> = peerRepo.observeNearbyPeers()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    fun startChat(peerNodeId: String, onNavigate: (conversationId: String, peerNodeId: String) -> Unit) {
+    fun startChat(peerNodeId: String, peerDisplayName: String?, onNavigate: (conversationId: String, peerNodeId: String) -> Unit) {
         viewModelScope.launch {
-            val conversation = conversationRepo.getOrCreateDirectConversation(peerNodeId)
+            val conversation = conversationRepo.getOrCreateDirectConversation(peerNodeId, peerDisplayName)
             onNavigate(conversation.conversationId, peerNodeId)
         }
     }
@@ -97,7 +97,7 @@ fun PeersScreen(
                     }
                     items(directPeers, key = { it.nodeId }) { peer ->
                         PeerItem(peer = peer, onChat = {
-                            viewModel.startChat(peer.nodeId, onStartChat)
+                            viewModel.startChat(peer.nodeId, peer.displayName, onStartChat)
                         })
                     }
                 }
@@ -113,7 +113,7 @@ fun PeersScreen(
                     }
                     items(relayPeers, key = { it.nodeId }) { peer ->
                         PeerItem(peer = peer, onChat = {
-                            viewModel.startChat(peer.nodeId, onStartChat)
+                            viewModel.startChat(peer.nodeId, peer.displayName, onStartChat)
                         })
                     }
                 }

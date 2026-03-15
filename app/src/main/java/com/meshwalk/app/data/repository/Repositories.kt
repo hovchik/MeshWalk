@@ -141,17 +141,30 @@ class ConversationRepositoryImpl @Inject constructor(
         return conversationDao.getById(conversationId)?.toDomain()
     }
 
-    override suspend fun getOrCreateDirectConversation(peerNodeId: String): Conversation {
+    override suspend fun getOrCreateDirectConversation(peerNodeId: String, peerDisplayName: String?): Conversation {
         val existing = conversationDao.findDirectConversation(peerNodeId)
-        if (existing != null) return existing.toDomain()
+        if (existing != null) {
+            // Update cached peer name if we now have one and it's different
+            val conv = existing.toDomain()
+            if (peerDisplayName != null && conv.peerDisplayName != peerDisplayName) {
+                conversationDao.updatePeerDisplayName(conv.conversationId, peerDisplayName)
+                return conv.copy(peerDisplayName = peerDisplayName)
+            }
+            return conv
+        }
 
         val conversation = Conversation(
             type = ConversationType.DIRECT,
             title = null,
-            participants = listOf(peerNodeId)
+            participants = listOf(peerNodeId),
+            peerDisplayName = peerDisplayName
         )
         conversationDao.insert(conversation.toEntity())
         return conversation
+    }
+
+    override suspend fun updatePeerDisplayName(conversationId: String, displayName: String) {
+        conversationDao.updatePeerDisplayName(conversationId, displayName)
     }
 
     override fun observeConversations(): Flow<List<Conversation>> {

@@ -19,7 +19,7 @@ import com.meshwalk.app.data.local.entity.*
         GroupEntity::class,
         SenderKeyEntity::class
     ],
-    version = 3,
+    version = 4,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -73,6 +73,16 @@ abstract class MeshWalkDatabase : RoomDatabase() {
                         PRIMARY KEY(groupId, senderNodeId)
                     )
                 """.trimIndent())
+            }
+        }
+
+        /**
+         * Add peerDisplayName column to conversations table so that direct
+         * conversation titles survive app restarts even when the peer is offline.
+         */
+        val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE conversations ADD COLUMN peerDisplayName TEXT DEFAULT NULL")
             }
         }
     }

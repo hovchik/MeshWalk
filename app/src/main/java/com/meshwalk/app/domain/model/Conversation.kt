@@ -10,12 +10,20 @@ data class Conversation(
     val type: ConversationType,
     val title: String?,
     val participants: List<String>, // node IDs
+    val peerDisplayName: String? = null, // cached peer name for DIRECT conversations
     val createdAt: Long = System.currentTimeMillis(),
     val lastMessageAt: Long? = null,
     val lastMessagePreview: String? = null,
     val unreadCount: Int = 0,
     val isEncrypted: Boolean = true
-)
+) {
+    /** Display title: group name, cached peer name, or truncated node ID. */
+    val displayTitle: String
+        get() = title
+            ?: peerDisplayName
+            ?: participants.firstOrNull()?.take(8)
+            ?: "Unknown"
+}
 
 enum class ConversationType {
     DIRECT,          // 1:1 chat

@@ -42,10 +42,10 @@ class MainActivity : ComponentActivity() {
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
-    ) { results ->
-        if (results.values.all { it }) {
-            startMeshService()
-        }
+    ) { _ ->
+        // Start the service regardless of which permissions were granted.
+        // Each transport checks its own permissions before calling platform APIs.
+        startMeshService()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
