@@ -77,7 +77,8 @@ class MessageResendManager @Inject constructor(
 
             val conversation = conversationRepo.getConversation(message.conversationId)
             if (conversation == null) {
-                Timber.w("Conversation ${message.conversationId.take(8)} not found, skipping resend")
+                Timber.w("Conversation ${message.conversationId.take(8)} deleted, marking message FAILED")
+                messageRepo.updateDeliveryStatus(message.messageId, DeliveryStatus.FAILED)
                 return
             }
 
@@ -87,15 +88,27 @@ class MessageResendManager @Inject constructor(
                 }
                 ConversationType.GROUP, ConversationType.TEMPORARY_GROUP -> {
                     val group = groupRepo.getGroup(conversation.conversationId)
-                    if (group != null) {
-                        val recipientIds = group.members
-                            .filter { it.nodeId != ourNodeId }
-                            .map { it.nodeId }
-                        meshOutbox.enqueueGroupMessage(message, recipientIds, group.groupId)
+                    if (group == null) {
+                        Timber.w("Group ${conversation.conversationId.take(8)} deleted, marking message FAILED")
+                        messageRepo.updateDeliveryStatus(message.messageId, DeliveryStatus.FAILED)
+                        return
+                    }
+                    // Only resend to the reconnected peer rather than all members.
+                    // Other members either already received it or will trigger their
+                    // own resend when they reconnect. Receiver-side messageId dedup
+                    // prevents duplicates if they already got it via a different path.
+                    val isMember = group.members.any { it.nodeId == peerNodeId }
+                    if (isMember) {
+                        meshOutbox.enqueueGroupMessage(message, listOf(peerNodeId), group.groupId)
+                    } else {
+                        Timber.d("Peer ${peerNodeId.take(8)} not in group, skipping group resend")
+                        return
                     }
                 }
                 ConversationType.BROADCAST -> {
-                    // Broadcast resend not supported
+                    Timber.d("Broadcast resend not supported, marking message FAILED")
+                    messageRepo.updateDeliveryStatus(message.messageId, DeliveryStatus.FAILED)
+                    return
                 }
             }
 
