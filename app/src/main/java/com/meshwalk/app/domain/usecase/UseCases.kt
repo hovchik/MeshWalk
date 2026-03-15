@@ -6,22 +6,10 @@ import timber.log.Timber
 import javax.inject.Inject
 
 class CreateIdentityUseCase @Inject constructor(
-    private val identityRepo: IdentityRepository,
-    private val cryptoManager: CryptoManagerPort
+    private val identityRepo: IdentityRepository
 ) {
     suspend operator fun invoke(name: String?, type: IdentityType): NodeIdentity {
-        val keyPair = cryptoManager.generateIdentityKeyPair()
-        val identity = NodeIdentity(
-            displayName = name,
-            identityType = type,
-            publicSigningKey = keyPair.signingPublicKey,
-            publicExchangeKey = keyPair.exchangePublicKey,
-            expiresAt = if (type == IdentityType.TEMPORARY) {
-                System.currentTimeMillis() + 24 * 60 * 60 * 1000 // 24 hours
-            } else null
-        )
-        identityRepo.createIdentity(name, type)
-        return identity
+        return identityRepo.createIdentity(name, type)
     }
 }
 

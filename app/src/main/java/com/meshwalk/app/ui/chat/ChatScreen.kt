@@ -36,6 +36,7 @@ import com.meshwalk.app.domain.usecase.SendMessageUseCase
 import com.meshwalk.app.mesh.group.GroupControlManager
 import com.meshwalk.app.util.TimeUtils
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -207,10 +208,13 @@ class ChatViewModel @Inject constructor(
         }
     }
 
+    private var loadPeersJob: Job? = null
+
     fun loadAvailablePeers() {
-        viewModelScope.launch {
-            val peers = peerRepo.observeNearbyPeers()
-            peers.collect { peerList ->
+        // Cancel any previous collection to prevent leaking coroutines
+        loadPeersJob?.cancel()
+        loadPeersJob = viewModelScope.launch {
+            peerRepo.observeNearbyPeers().collect { peerList ->
                 val nonMembers = peerList.filter { peer ->
                     _state.value.groupMembers.none { it.nodeId == peer.nodeId }
                 }

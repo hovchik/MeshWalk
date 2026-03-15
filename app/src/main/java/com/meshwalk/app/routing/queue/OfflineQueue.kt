@@ -95,9 +95,13 @@ class OfflineQueue @Inject constructor() {
      * Increment retry count for a packet.
      */
     fun markRetry(packetId: String) {
-        packetIndex[packetId]?.let {
-            val updated = it.copy(retryCount = it.retryCount + 1)
-            packetIndex[packetId] = updated
+        synchronized(lock) {
+            packetIndex[packetId]?.let { old ->
+                val updated = old.copy(retryCount = old.retryCount + 1)
+                queue.remove(old)
+                queue.add(updated)
+                packetIndex[packetId] = updated
+            }
         }
     }
 

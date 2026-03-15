@@ -41,7 +41,7 @@ class MeshForegroundService : Service() {
     @Inject lateinit var messageResendManager: MessageResendManager
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private var meshStarted = false
+    @Volatile private var meshStarted = false
 
     companion object {
         const val CHANNEL_ID = "mesh_service_channel"
