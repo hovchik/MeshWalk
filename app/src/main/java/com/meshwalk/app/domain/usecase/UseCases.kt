@@ -2,6 +2,7 @@ package com.meshwalk.app.domain.usecase
 
 import com.meshwalk.app.domain.model.*
 import com.meshwalk.app.domain.repository.*
+import timber.log.Timber
 import javax.inject.Inject
 
 class CreateIdentityUseCase @Inject constructor(
@@ -44,7 +45,13 @@ class SendMessageUseCase @Inject constructor(
         )
         messageRepo.saveMessage(message)
         conversationRepo.updateLastMessage(conversationId, text, message.timestamp)
-        meshOutbox.enqueueMessage(message, recipientNodeId)
+        try {
+            meshOutbox.enqueueMessage(message, recipientNodeId)
+        } catch (e: Exception) {
+            // Message is saved and already marked FAILED by MeshOutbox.
+            // MessageResendManager will retry when the peer reconnects.
+            Timber.w(e, "Message ${message.messageId.take(8)} could not be sent now, will retry on reconnect")
+        }
         return message
     }
 }
@@ -77,7 +84,13 @@ class SendGroupMessageUseCase @Inject constructor(
         val recipientNodeIds = group.members
             .filter { it.nodeId != senderNodeId }
             .map { it.nodeId }
-        meshOutbox.enqueueGroupMessage(message, recipientNodeIds, groupId)
+        try {
+            meshOutbox.enqueueGroupMessage(message, recipientNodeIds, groupId)
+        } catch (e: Exception) {
+            // Message is saved and already marked FAILED by MeshOutbox.
+            // MessageResendManager will retry when the peer reconnects.
+            Timber.w(e, "Group message ${message.messageId.take(8)} could not be sent now, will retry on reconnect")
+        }
 
         return message
     }

@@ -274,9 +274,13 @@ class MeshRoutingEngine @Inject constructor(
 
         // 3. Flood to all connected peers
         if (directPeers.isNotEmpty()) {
-            transportManager.broadcastPacket(packet)
-            Timber.d("Flooded ${packet.packetId} to ${directPeers.size} peers")
-            return true
+            val sentCount = transportManager.broadcastPacket(packet)
+            if (sentCount > 0) {
+                Timber.d("Flooded ${packet.packetId} to $sentCount/${directPeers.size} peers")
+                return true
+            }
+            Timber.w("Flood failed: 0/${directPeers.size} peers accepted ${packet.packetId}")
+            // Fall through to queue
         }
 
         // 4. No peers available — queue for later delivery
@@ -308,6 +312,7 @@ class MeshRoutingEngine @Inject constructor(
                 // This new peer might be closer to the destination
                 val sent = transportManager.sendPacket(packet, newPeerNodeId)
                 if (sent) {
+                    offlineQueue.markRetry(packet.packetId)
                     Timber.d("Forwarded queued ${packet.packetId} via new peer $newPeerNodeId")
                 }
             }

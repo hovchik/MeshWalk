@@ -197,19 +197,25 @@ class TransportManager @Inject constructor(
     /**
      * Broadcast a packet to all directly connected peers.
      * Used for flooding-based routing or discovery announcements.
+     *
+     * @return the number of peers the packet was successfully sent to.
      */
-    suspend fun broadcastPacket(packet: MeshPacket, excludeNodeId: String? = null) {
+    suspend fun broadcastPacket(packet: MeshPacket, excludeNodeId: String? = null): Int {
         val serialized = serializePacket(packet)
         val connected = nearbyTransport.getConnectedEndpoints()
+        var successCount = 0
 
         connected.forEach { endpointId ->
             val nodeId = nearbyTransport.getNodeIdForEndpoint(endpointId)
             if (nodeId != excludeNodeId) {
-                nearbyTransport.sendData(endpointId, serialized).onFailure {
+                nearbyTransport.sendData(endpointId, serialized).onSuccess {
+                    successCount++
+                }.onFailure {
                     Timber.w("Failed to broadcast to $endpointId")
                 }
             }
         }
+        return successCount
     }
 
     /**

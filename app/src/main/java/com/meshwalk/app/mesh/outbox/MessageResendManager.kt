@@ -2,6 +2,7 @@ package com.meshwalk.app.mesh.outbox
 
 import com.meshwalk.app.domain.model.ConversationType
 import com.meshwalk.app.domain.model.DeliveryStatus
+import com.meshwalk.app.domain.model.MeshMessage
 import com.meshwalk.app.domain.repository.ConversationRepository
 import com.meshwalk.app.domain.repository.GroupRepository
 import com.meshwalk.app.domain.repository.MessageRepository
@@ -15,11 +16,15 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Automatically resends FAILED messages when their recipient peer comes back online.
+ * Automatically resends undelivered messages when their recipient peer comes back online.
  *
  * Listens for [TransportEvent.Connected] events and queries for any outgoing messages
- * with FAILED delivery status that belong to conversations with that peer. Each failed
- * message is re-enqueued through the outbox, which handles encryption and routing.
+ * with FAILED or stale PENDING delivery status that belong to conversations with that
+ * peer. Each message is re-enqueued through the outbox for encryption and routing.
+ *
+ * Stale PENDING messages arise when the routing engine queued a packet in the offline
+ * queue (returning false from sendPacket) and the QueuedMessageHandler eventually gave
+ * up. The packet is gone but the message was never marked FAILED or SENT.
  */
 @Singleton
 class MessageResendManager @Inject constructor(
@@ -30,57 +35,74 @@ class MessageResendManager @Inject constructor(
     private val meshOutbox: MeshOutboxPort
 ) {
 
+    companion object {
+        /** PENDING messages older than this are considered stale and should be resent. */
+        private const val STALE_PENDING_THRESHOLD_MS = 30_000L
+    }
+
     fun start(ourNodeId: String, scope: CoroutineScope) {
         scope.launch {
             transportManager.transportEvents.collect { event ->
                 if (event is TransportEvent.Connected && event.nodeId != null) {
-                    resendFailedMessages(ourNodeId, event.nodeId!!)
+                    resendUndeliveredMessages(ourNodeId, event.nodeId!!)
                 }
             }
         }
         Timber.d("MessageResendManager started")
     }
 
-    private suspend fun resendFailedMessages(ourNodeId: String, peerNodeId: String) {
+    private suspend fun resendUndeliveredMessages(ourNodeId: String, peerNodeId: String) {
         val failedMessages = messageRepo.getFailedMessagesForPeer(peerNodeId)
-        if (failedMessages.isEmpty()) return
+        val stalePendingMessages = messageRepo.getStalePendingMessagesForPeer(
+            peerNodeId,
+            System.currentTimeMillis() - STALE_PENDING_THRESHOLD_MS
+        )
 
-        Timber.d("Peer ${peerNodeId.take(8)} reconnected, resending ${failedMessages.size} failed message(s)")
+        val messagesToResend = (failedMessages + stalePendingMessages)
+            .distinctBy { it.messageId }
 
-        for (message in failedMessages) {
-            try {
-                // Mark as PENDING before resend attempt
-                messageRepo.updateDeliveryStatus(message.messageId, DeliveryStatus.PENDING)
+        if (messagesToResend.isEmpty()) return
 
-                val conversation = conversationRepo.getConversation(message.conversationId)
-                if (conversation == null) {
-                    Timber.w("Conversation ${message.conversationId.take(8)} not found, skipping resend")
-                    continue
-                }
+        Timber.d("Peer ${peerNodeId.take(8)} reconnected, resending ${messagesToResend.size} undelivered message(s) (${failedMessages.size} failed, ${stalePendingMessages.size} stale pending)")
 
-                when (conversation.type) {
-                    ConversationType.DIRECT -> {
-                        meshOutbox.enqueueMessage(message, peerNodeId)
-                    }
-                    ConversationType.GROUP, ConversationType.TEMPORARY_GROUP -> {
-                        val group = groupRepo.getGroup(conversation.conversationId)
-                        if (group != null) {
-                            val recipientIds = group.members
-                                .filter { it.nodeId != ourNodeId }
-                                .map { it.nodeId }
-                            meshOutbox.enqueueGroupMessage(message, recipientIds, group.groupId)
-                        }
-                    }
-                    ConversationType.BROADCAST -> {
-                        // Broadcast resend not supported
-                    }
-                }
+        for (message in messagesToResend) {
+            resendMessage(ourNodeId, peerNodeId, message)
+        }
+    }
 
-                Timber.d("Resent message ${message.messageId.take(8)} to ${peerNodeId.take(8)}")
-            } catch (e: Exception) {
-                Timber.e(e, "Failed to resend message ${message.messageId.take(8)}")
-                messageRepo.updateDeliveryStatus(message.messageId, DeliveryStatus.FAILED)
+    private suspend fun resendMessage(ourNodeId: String, peerNodeId: String, message: MeshMessage) {
+        try {
+            // Mark as PENDING before resend attempt
+            messageRepo.updateDeliveryStatus(message.messageId, DeliveryStatus.PENDING)
+
+            val conversation = conversationRepo.getConversation(message.conversationId)
+            if (conversation == null) {
+                Timber.w("Conversation ${message.conversationId.take(8)} not found, skipping resend")
+                return
             }
+
+            when (conversation.type) {
+                ConversationType.DIRECT -> {
+                    meshOutbox.enqueueMessage(message, peerNodeId)
+                }
+                ConversationType.GROUP, ConversationType.TEMPORARY_GROUP -> {
+                    val group = groupRepo.getGroup(conversation.conversationId)
+                    if (group != null) {
+                        val recipientIds = group.members
+                            .filter { it.nodeId != ourNodeId }
+                            .map { it.nodeId }
+                        meshOutbox.enqueueGroupMessage(message, recipientIds, group.groupId)
+                    }
+                }
+                ConversationType.BROADCAST -> {
+                    // Broadcast resend not supported
+                }
+            }
+
+            Timber.d("Resent message ${message.messageId.take(8)} to ${peerNodeId.take(8)}")
+        } catch (e: Exception) {
+            Timber.e(e, "Failed to resend message ${message.messageId.take(8)}")
+            messageRepo.updateDeliveryStatus(message.messageId, DeliveryStatus.FAILED)
         }
     }
 }
