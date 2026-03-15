@@ -328,13 +328,48 @@ fun ChatScreen(
                     }
                 }
             )
-        },
-        bottomBar = {
+        }
+    ) { padding ->
+        // Use a Column with imePadding so both the message list and input bar
+        // resize correctly when the keyboard opens. The message list takes all
+        // available space (weight 1f) and the input bar sits at the bottom.
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .imePadding()
+        ) {
+            // Message list — fills available space above input bar
+            LazyColumn(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp),
+                state = listState,
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+                contentPadding = PaddingValues(vertical = 8.dp)
+            ) {
+                items(state.messages, key = { it.messageId }) { message ->
+                    val senderName = if (state.isGroupChat && message.isIncoming) {
+                        state.groupMembers.find { it.nodeId == message.senderNodeId }?.displayName
+                            ?: message.senderNodeId.take(8)
+                    } else null
+
+                    MessageBubble(
+                        message = message,
+                        isOutgoing = !message.isIncoming,
+                        showHopCount = state.showHopCount,
+                        senderName = senderName
+                    )
+                }
+            }
+
+            // Input bar — stays above keyboard
             Surface(
                 tonalElevation = 3.dp,
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Column(modifier = Modifier.imePadding()) {
+                Column {
                     Row(
                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically
@@ -387,30 +422,6 @@ fun ChatScreen(
                         })
                     }
                 }
-            }
-        }
-    ) { padding ->
-        LazyColumn(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .padding(horizontal = 12.dp),
-            state = listState,
-            verticalArrangement = Arrangement.spacedBy(4.dp),
-            contentPadding = PaddingValues(vertical = 8.dp)
-        ) {
-            items(state.messages, key = { it.messageId }) { message ->
-                val senderName = if (state.isGroupChat && message.isIncoming) {
-                    state.groupMembers.find { it.nodeId == message.senderNodeId }?.displayName
-                        ?: message.senderNodeId.take(8)
-                } else null
-
-                MessageBubble(
-                    message = message,
-                    isOutgoing = !message.isIncoming,
-                    showHopCount = state.showHopCount,
-                    senderName = senderName
-                )
             }
         }
     }

@@ -61,10 +61,10 @@ fun MeshWalkApp(mainViewModel: MainViewModel = hiltViewModel()) {
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentDestination = navBackStackEntry?.destination
 
-    val setupRoutes = setOf(Routes.ONBOARDING, Routes.IDENTITY_SETUP)
     val currentRoute = currentDestination?.route
-    val showBottomBar = currentRoute != null && currentRoute !in setupRoutes
     val bottomNavRoutes = BottomNavItem.entries.map { it.route }
+    // Only show bottom nav and top menu on the 5 main tab screens
+    val showBottomBar = currentRoute in bottomNavRoutes
     val showTopMenu = currentRoute in bottomNavRoutes
 
     val identity by mainViewModel.identity.collectAsState()
