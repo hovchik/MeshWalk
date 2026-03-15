@@ -5,6 +5,8 @@ import com.meshwalk.app.domain.repository.PeerRepository
 import com.meshwalk.app.domain.repository.RoutingRepository
 import com.meshwalk.app.routing.dedup.PacketDeduplicator
 import com.meshwalk.app.routing.queue.OfflineQueue
+import com.meshwalk.app.routing.queue.QueuedMessageHandler
+import com.meshwalk.app.routing.queue.QueueFlushEvent
 import com.meshwalk.app.routing.table.RoutingTable
 import com.meshwalk.app.transport.api.TransportEvent
 import com.meshwalk.app.transport.manager.TransportManager
@@ -43,6 +45,7 @@ class MeshRoutingEngine @Inject constructor(
     private val routingTable: RoutingTable,
     private val deduplicator: PacketDeduplicator,
     private val offlineQueue: OfflineQueue,
+    private val queuedMessageHandler: QueuedMessageHandler,
     private val peerRepository: PeerRepository,
     private val routingRepository: RoutingRepository
 ) {
@@ -67,6 +70,15 @@ class MeshRoutingEngine @Inject constructor(
         selfNodeId = nodeId
         isRunning = true
 
+        // Wire up queued message handler callbacks
+        queuedMessageHandler.onReconnectForQueue = {
+            transportManager.startDiscovery()
+            transportManager.startAdvertising()
+        }
+        queuedMessageHandler.onFlushQueue = {
+            flushAllQueued()
+        }
+
         // Listen for incoming data from transport layer
         scope.launch {
             transportManager.transportEvents.collect { event ->
@@ -80,6 +92,8 @@ class MeshRoutingEngine @Inject constructor(
                     is TransportEvent.Connected -> {
                         // New peer connected — flush any queued messages for reachable nodes
                         event.nodeId?.let { flushOfflineQueue(it) }
+                        // Notify handler that connectivity changed
+                        queuedMessageHandler.onConnectivityRestored()
                     }
                     is TransportEvent.Disconnected -> {
                         // Update routing table
@@ -89,6 +103,29 @@ class MeshRoutingEngine @Inject constructor(
                         }
                     }
                     else -> {} // Other events handled by transport manager
+                }
+            }
+        }
+
+        // Forward queued message handler events as routing diagnostics
+        scope.launch {
+            queuedMessageHandler.events.collect { event ->
+                when (event) {
+                    is QueueFlushEvent.FlushScheduled ->
+                        emitDiagnostic(RoutingDiagnosticEvent.QueueFlushScheduled(
+                            event.attempt, event.maxAttempts, event.delayMs, event.queuedCount
+                        ))
+                    is QueueFlushEvent.FlushCompleted ->
+                        emitDiagnostic(RoutingDiagnosticEvent.QueueFlushCompleted(
+                            event.attempt, event.sentCount, event.remainingCount
+                        ))
+                    is QueueFlushEvent.QueueDrained ->
+                        emitDiagnostic(RoutingDiagnosticEvent.QueueDrained(event.totalAttempts))
+                    is QueueFlushEvent.GaveUp ->
+                        emitDiagnostic(RoutingDiagnosticEvent.QueueFlushGaveUp(
+                            event.totalAttempts, event.remainingCount
+                        ))
+                    else -> {}
                 }
             }
         }
@@ -114,6 +151,7 @@ class MeshRoutingEngine @Inject constructor(
      */
     fun stop() {
         isRunning = false
+        queuedMessageHandler.cancel()
         scope.coroutineContext.cancelChildren()
         Timber.d("Routing engine stopped")
     }
@@ -245,6 +283,8 @@ class MeshRoutingEngine @Inject constructor(
         offlineQueue.enqueue(packet)
         Timber.d("Queued ${packet.packetId} for offline delivery")
         emitDiagnostic(RoutingDiagnosticEvent.PacketQueued(packet.packetId, destNodeId))
+        // Start Fibonacci retry cycle to reconnect and drain the queue
+        queuedMessageHandler.onMessageQueued()
         return false
     }
 
@@ -272,6 +312,58 @@ class MeshRoutingEngine @Inject constructor(
                 }
             }
         }
+    }
+
+    /**
+     * Attempt to flush all queued messages to any connected peers.
+     * Returns the number of messages still remaining in the queue.
+     */
+    private suspend fun flushAllQueued(): Int {
+        val connectedPeers = transportManager.getConnectedNodeIds()
+        if (connectedPeers.isEmpty()) return offlineQueue.size()
+
+        val allQueued = offlineQueue.getAll()
+        var sentCount = 0
+
+        allQueued.forEach { packet ->
+            val destNodeId = packet.destinationNodeId
+
+            // Try direct send if destination is connected
+            if (destNodeId in connectedPeers) {
+                val sent = transportManager.sendPacket(packet, destNodeId)
+                if (sent) {
+                    offlineQueue.remove(packet.packetId)
+                    sentCount++
+                    Timber.d("Queue flush: sent ${packet.packetId} directly to $destNodeId")
+                    return@forEach
+                }
+            }
+
+            // Try routing table
+            val route = routingTable.getRoute(destNodeId)
+            if (route != null && route.nextHopNodeId in connectedPeers) {
+                val sent = transportManager.sendPacket(packet, route.nextHopNodeId)
+                if (sent) {
+                    offlineQueue.remove(packet.packetId)
+                    sentCount++
+                    Timber.d("Queue flush: sent ${packet.packetId} via route to ${route.nextHopNodeId}")
+                    return@forEach
+                }
+            }
+
+            // Try flooding to any connected peer
+            connectedPeers.firstOrNull()?.let { peerId ->
+                val sent = transportManager.sendPacket(packet, peerId)
+                if (sent) {
+                    offlineQueue.markRetry(packet.packetId)
+                    sentCount++
+                    Timber.d("Queue flush: flooded ${packet.packetId} via $peerId")
+                }
+            }
+        }
+
+        Timber.d("Queue flush: sent $sentCount, remaining ${offlineQueue.size()}")
+        return offlineQueue.size()
     }
 
     /**
@@ -327,4 +419,8 @@ sealed interface RoutingDiagnosticEvent {
     data class PacketExpired(val packetId: String) : RoutingDiagnosticEvent
     data class DuplicateDropped(val packetId: String) : RoutingDiagnosticEvent
     data class RouteMaintenance(val routeCount: Int, val queuedPackets: Int) : RoutingDiagnosticEvent
+    data class QueueFlushScheduled(val attempt: Int, val maxAttempts: Int, val delayMs: Long, val queuedCount: Int) : RoutingDiagnosticEvent
+    data class QueueFlushCompleted(val attempt: Int, val sentCount: Int, val remainingCount: Int) : RoutingDiagnosticEvent
+    data class QueueDrained(val totalAttempts: Int) : RoutingDiagnosticEvent
+    data class QueueFlushGaveUp(val totalAttempts: Int, val remainingCount: Int) : RoutingDiagnosticEvent
 }
