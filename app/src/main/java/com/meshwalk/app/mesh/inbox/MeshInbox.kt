@@ -41,6 +41,11 @@ class MeshInbox @Inject constructor(
     private val notificationManager: MessageNotificationManager
 ) {
 
+    companion object {
+        /** If a message arrives more than 30 seconds after it was sent, mark it as delayed. */
+        private const val DELAYED_THRESHOLD_MS = 30_000L
+    }
+
     fun start(ourNodeId: String, scope: CoroutineScope) {
         scope.launch {
             routingEngine.incomingPackets.collect { packet ->
@@ -84,9 +89,11 @@ class MeshInbox @Inject constructor(
         val senderPeer = peerRepo.getPeer(packet.sourceNodeId)
         val conversation = conversationRepo.getOrCreateDirectConversation(packet.sourceNodeId, senderPeer?.displayName)
 
+        val isDelayed = System.currentTimeMillis() - message.timestamp > DELAYED_THRESHOLD_MS
         val localMessage = message.copy(
             conversationId = conversation.conversationId,
-            deliveryStatus = DeliveryStatus.DELIVERED
+            deliveryStatus = DeliveryStatus.DELIVERED,
+            isDelayed = isDelayed
         )
 
         if (messageRepo.getMessageById(localMessage.messageId) != null) {
@@ -170,7 +177,11 @@ class MeshInbox @Inject constructor(
             return
         }
 
-        val localMessage = message.copy(deliveryStatus = DeliveryStatus.DELIVERED)
+        val isDelayed = System.currentTimeMillis() - message.timestamp > DELAYED_THRESHOLD_MS
+        val localMessage = message.copy(
+            deliveryStatus = DeliveryStatus.DELIVERED,
+            isDelayed = isDelayed
+        )
 
         if (messageRepo.getMessageById(localMessage.messageId) != null) {
             Timber.d("Duplicate group message ${localMessage.messageId}, skipping")

@@ -1,6 +1,8 @@
 package com.meshwalk.app.data.local.entity
 
-import androidx.room.*
+import androidx.room.ColumnInfo
+import androidx.room.Entity
+import androidx.room.PrimaryKey
 
 @Entity(tableName = "identities")
 data class IdentityEntity(
@@ -32,7 +34,9 @@ data class MessageEntity(
     val deliveryStatus: String,
     val isIncoming: Boolean,
     val hopCount: Int,
-    val expiresAt: Long?
+    val expiresAt: Long?,
+    @ColumnInfo(defaultValue = "0")
+    val isDelayed: Boolean = false
 )
 
 @Entity(tableName = "conversations")

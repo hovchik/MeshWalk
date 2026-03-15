@@ -43,7 +43,8 @@ object EntityMapper {
         deliveryStatus = deliveryStatus.toEnumSafe(DeliveryStatus.PENDING),
         isIncoming = isIncoming,
         hopCount = hopCount,
-        expiresAt = expiresAt
+        expiresAt = expiresAt,
+        isDelayed = isDelayed
     )
 
     fun MeshMessage.toEntity() = MessageEntity(
@@ -62,7 +63,8 @@ object EntityMapper {
         deliveryStatus = deliveryStatus.name,
         isIncoming = isIncoming,
         hopCount = hopCount,
-        expiresAt = expiresAt
+        expiresAt = expiresAt,
+        isDelayed = isDelayed
     )
 
     // -- Conversation --

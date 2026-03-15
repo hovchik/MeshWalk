@@ -583,12 +583,16 @@ private fun MessageBubble(
     senderName: String? = null
 ) {
     val alignment = if (isOutgoing) Alignment.CenterEnd else Alignment.CenterStart
-    val bubbleColor = if (isOutgoing) {
+    val bubbleColor = if (message.isDelayed && message.isIncoming) {
+        MaterialTheme.colorScheme.tertiaryContainer
+    } else if (isOutgoing) {
         MaterialTheme.colorScheme.primary
     } else {
         MaterialTheme.colorScheme.surfaceVariant
     }
-    val textColor = if (isOutgoing) {
+    val textColor = if (message.isDelayed && message.isIncoming) {
+        MaterialTheme.colorScheme.onTertiaryContainer
+    } else if (isOutgoing) {
         MaterialTheme.colorScheme.onPrimary
     } else {
         MaterialTheme.colorScheme.onSurface
@@ -615,11 +619,30 @@ private fun MessageBubble(
             tonalElevation = 1.dp
         ) {
             Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+                if (message.isDelayed && message.isIncoming) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            Icons.Filled.Schedule,
+                            contentDescription = "Delayed message",
+                            modifier = Modifier.size(12.dp),
+                            tint = MaterialTheme.colorScheme.tertiary
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = "Delayed",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.tertiary
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(2.dp))
+                }
                 if (senderName != null) {
                     Text(
                         text = senderName,
                         style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.primary
+                        color = if (message.isDelayed && message.isIncoming)
+                            MaterialTheme.colorScheme.tertiary
+                        else MaterialTheme.colorScheme.primary
                     )
                     Spacer(modifier = Modifier.height(2.dp))
                 }

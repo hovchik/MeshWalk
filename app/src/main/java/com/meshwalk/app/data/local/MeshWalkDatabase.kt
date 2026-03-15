@@ -19,7 +19,7 @@ import com.meshwalk.app.data.local.entity.*
         GroupEntity::class,
         SenderKeyEntity::class
     ],
-    version = 4,
+    version = 5,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -83,6 +83,16 @@ abstract class MeshWalkDatabase : RoomDatabase() {
         val MIGRATION_3_4 = object : Migration(3, 4) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE conversations ADD COLUMN peerDisplayName TEXT DEFAULT NULL")
+            }
+        }
+
+        /**
+         * Add isDelayed column to messages table to track messages that arrived
+         * significantly later than when they were sent (offline/resend scenarios).
+         */
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE messages ADD COLUMN isDelayed INTEGER NOT NULL DEFAULT 0")
             }
         }
     }

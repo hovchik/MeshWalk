@@ -54,6 +54,9 @@ interface MessageDao {
     @Query("SELECT * FROM messages WHERE messageId = :messageId")
     suspend fun getById(messageId: String): MessageEntity?
 
+    @Query("SELECT * FROM messages WHERE deliveryStatus = 'FAILED' AND isIncoming = 0 AND conversationId IN (SELECT conversationId FROM conversations WHERE participants LIKE '%' || :peerNodeId || '%') ORDER BY timestamp ASC")
+    suspend fun getFailedForPeer(peerNodeId: String): List<MessageEntity>
+
     @Query("DELETE FROM messages WHERE messageId = :messageId")
     suspend fun delete(messageId: String)
 
