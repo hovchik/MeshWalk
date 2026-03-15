@@ -34,7 +34,7 @@ class QueuedMessageHandler @Inject constructor(
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var flushJob: Job? = null
-    private var isActive = false
+    private var isFlushActive = false
 
     private val _events = MutableSharedFlow<QueueFlushEvent>(extraBufferCapacity = 32)
     val events: SharedFlow<QueueFlushEvent> = _events
@@ -50,7 +50,7 @@ class QueuedMessageHandler @Inject constructor(
      * Starts the Fibonacci retry cycle if not already running.
      */
     fun onMessageQueued() {
-        if (flushJob?.isActive == true) {
+        if (flushJob?.isFlushActive == true) {
             Timber.d("Queue flush cycle already running")
             return
         }
@@ -85,16 +85,16 @@ class QueuedMessageHandler @Inject constructor(
     fun cancel() {
         flushJob?.cancel()
         flushJob = null
-        isActive = false
+        isFlushActive = false
         Timber.d("Queued message handler cancelled")
     }
 
     private fun startFlushCycle() {
-        isActive = true
+        isFlushActive = true
         var attemptIndex = 0
 
         flushJob = scope.launch {
-            while (isActive && attemptIndex < MAX_ATTEMPTS && offlineQueue.size() > 0) {
+            while (isFlushActive && attemptIndex < MAX_ATTEMPTS && offlineQueue.size() > 0) {
                 val delayMs = fibonacciDelay(attemptIndex)
                 val queueSize = offlineQueue.size()
 
@@ -153,7 +153,7 @@ class QueuedMessageHandler @Inject constructor(
                 )
             }
 
-            isActive = false
+            isFlushActive = false
             flushJob = null
         }
     }
