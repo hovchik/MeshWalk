@@ -33,30 +33,33 @@ class OfflineQueue @Inject constructor() {
 
     private val queue = ConcurrentLinkedQueue<QueuedPacket>()
     private val packetIndex = ConcurrentHashMap<String, QueuedPacket>()
+    private val lock = Any()
 
     /**
      * Add a packet to the offline queue.
      */
     fun enqueue(packet: MeshPacket) {
-        // Don't queue duplicates
-        if (packetIndex.containsKey(packet.packetId)) return
+        synchronized(lock) {
+            // Don't queue duplicates
+            if (packetIndex.containsKey(packet.packetId)) return
 
-        // Evict if full
-        while (queue.size >= MAX_QUEUE_SIZE) {
-            val oldest = queue.poll()
-            if (oldest != null) {
-                packetIndex.remove(oldest.packet.packetId)
-                Timber.d("Evicted oldest queued packet: ${oldest.packet.packetId}")
+            // Evict if full
+            while (queue.size >= MAX_QUEUE_SIZE) {
+                val oldest = queue.poll()
+                if (oldest != null) {
+                    packetIndex.remove(oldest.packet.packetId)
+                    Timber.d("Evicted oldest queued packet: ${oldest.packet.packetId}")
+                }
             }
-        }
 
-        val queued = QueuedPacket(
-            packet = packet,
-            queuedAt = System.currentTimeMillis(),
-            retryCount = 0
-        )
-        queue.add(queued)
-        packetIndex[packet.packetId] = queued
+            val queued = QueuedPacket(
+                packet = packet,
+                queuedAt = System.currentTimeMillis(),
+                retryCount = 0
+            )
+            queue.add(queued)
+            packetIndex[packet.packetId] = queued
+        }
         Timber.d("Queued packet ${packet.packetId} for ${packet.destinationNodeId}")
     }
 
@@ -80,9 +83,11 @@ class OfflineQueue @Inject constructor() {
      * Remove a packet from the queue (after successful delivery).
      */
     fun remove(packetId: String) {
-        val queued = packetIndex.remove(packetId)
-        if (queued != null) {
-            queue.remove(queued)
+        synchronized(lock) {
+            val queued = packetIndex.remove(packetId)
+            if (queued != null) {
+                queue.remove(queued)
+            }
         }
     }
 
@@ -100,13 +105,15 @@ class OfflineQueue @Inject constructor() {
      * Remove expired packets.
      */
     fun pruneExpired() {
-        val expired = queue.filter { it.isExpired }
-        expired.forEach { queued ->
-            queue.remove(queued)
-            packetIndex.remove(queued.packet.packetId)
-        }
-        if (expired.isNotEmpty()) {
-            Timber.d("Pruned ${expired.size} expired queued packets")
+        synchronized(lock) {
+            val expired = queue.filter { it.isExpired }
+            expired.forEach { queued ->
+                queue.remove(queued)
+                packetIndex.remove(queued.packet.packetId)
+            }
+            if (expired.isNotEmpty()) {
+                Timber.d("Pruned ${expired.size} expired queued packets")
+            }
         }
     }
 

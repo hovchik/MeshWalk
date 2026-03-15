@@ -12,10 +12,12 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.meshwalk.app.domain.model.Conversation
 import com.meshwalk.app.domain.model.ConversationType
 import com.meshwalk.app.domain.model.GroupInfo
 import com.meshwalk.app.domain.model.GroupInvitation
@@ -27,6 +29,7 @@ import com.meshwalk.app.domain.repository.MessageRepository
 import com.meshwalk.app.domain.repository.PeerRepository
 import com.meshwalk.app.domain.usecase.CreateGroupUseCase
 import com.meshwalk.app.mesh.group.GroupControlManager
+import com.meshwalk.app.util.TimeUtils
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -43,8 +46,17 @@ class GroupListViewModel @Inject constructor(
     private val groupControlManager: GroupControlManager
 ) : ViewModel() {
 
+    data class GroupWithConversation(
+        val group: GroupInfo,
+        val conversation: Conversation? = null
+    ) {
+        val lastMessagePreview: String? get() = conversation?.lastMessagePreview
+        val lastMessageAt: Long? get() = conversation?.lastMessageAt
+        val unreadCount: Int get() = conversation?.unreadCount ?: 0
+    }
+
     data class UiState(
-        val groups: List<GroupInfo> = emptyList(),
+        val groups: List<GroupWithConversation> = emptyList(),
         val availablePeers: List<PeerNode> = emptyList(),
         val pendingInvitations: List<GroupInvitation> = emptyList(),
         val error: String? = null,
@@ -54,8 +66,18 @@ class GroupListViewModel @Inject constructor(
     private val _state = MutableStateFlow(UiState())
     val state = _state.asStateFlow()
 
-    val groups: StateFlow<List<GroupInfo>> = groupRepo.observeGroups()
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    val groups: StateFlow<List<GroupWithConversation>> = combine(
+        groupRepo.observeGroups(),
+        conversationRepo.observeConversations()
+    ) { groupList, conversationList ->
+        val conversationMap = conversationList.associateBy { it.conversationId }
+        groupList.map { group ->
+            GroupWithConversation(
+                group = group,
+                conversation = conversationMap[group.groupId]
+            )
+        }.sortedByDescending { it.lastMessageAt ?: it.group.createdAt }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val availablePeers: StateFlow<List<PeerNode>> = peerRepo.observeNearbyPeers()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -216,11 +238,11 @@ fun GroupListScreen(
                             modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
                         )
                     }
-                    items(groups, key = { it.groupId }) { group ->
+                    items(groups, key = { it.group.groupId }) { groupWithConvo ->
                         GroupItem(
-                            group = group,
-                            onClick = { onGroupClick(group.groupId) },
-                            onDelete = { deleteTarget = group }
+                            groupWithConvo = groupWithConvo,
+                            onClick = { onGroupClick(groupWithConvo.group.groupId) },
+                            onDelete = { deleteTarget = groupWithConvo.group }
                         )
                     }
                 }
@@ -304,7 +326,12 @@ private fun InvitationItem(
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun GroupItem(group: GroupInfo, onClick: () -> Unit, onDelete: () -> Unit = {}) {
+private fun GroupItem(
+    groupWithConvo: GroupListViewModel.GroupWithConversation,
+    onClick: () -> Unit,
+    onDelete: () -> Unit = {}
+) {
+    val group = groupWithConvo.group
     ListItem(
         modifier = Modifier.combinedClickable(
             onClick = onClick,
@@ -312,11 +339,21 @@ private fun GroupItem(group: GroupInfo, onClick: () -> Unit, onDelete: () -> Uni
         ),
         headlineContent = { Text(group.name) },
         supportingContent = {
-            Text(
-                "${group.members.size} members" +
-                        if (group.isTemporary) " • Temporary" else "",
-                style = MaterialTheme.typography.bodySmall
-            )
+            val preview = groupWithConvo.lastMessagePreview
+            if (preview != null) {
+                Text(
+                    text = preview,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else {
+                Text(
+                    "${group.members.size} members" +
+                            if (group.isTemporary) " • Temporary" else "",
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
         },
         leadingContent = {
             Icon(
@@ -326,6 +363,23 @@ private fun GroupItem(group: GroupInfo, onClick: () -> Unit, onDelete: () -> Uni
                 modifier = Modifier.size(40.dp),
                 tint = MaterialTheme.colorScheme.primary
             )
+        },
+        trailingContent = {
+            Column(horizontalAlignment = Alignment.End) {
+                groupWithConvo.lastMessageAt?.let { timestamp ->
+                    Text(
+                        text = TimeUtils.formatTimestamp(timestamp),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                if (groupWithConvo.unreadCount > 0) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Badge {
+                        Text(groupWithConvo.unreadCount.toString())
+                    }
+                }
+            }
         }
     )
 }

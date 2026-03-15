@@ -96,10 +96,10 @@ class MeshRoutingEngine @Inject constructor(
                         queuedMessageHandler.onConnectivityRestored()
                     }
                     is TransportEvent.Disconnected -> {
-                        // Update routing table
-                        val nodeId = transportManager.let {
-                            // Endpoint disconnected
-                            null // Will be resolved by transport manager
+                        // Update routing table — remove routes via the disconnected endpoint
+                        val disconnectedNodeId = transportManager.getNodeIdForEndpoint(event.endpointId)
+                        if (disconnectedNodeId != null) {
+                            routingTable.removeRoutesVia(disconnectedNodeId)
                         }
                     }
                     else -> {} // Other events handled by transport manager
@@ -238,11 +238,8 @@ class MeshRoutingEngine @Inject constructor(
         }
 
         // Fall back to flooding (broadcast to all except sender)
-        val fromNodeId = transportManager.let {
-            // Resolve endpoint to nodeId to exclude
-            null
-        }
-        transportManager.broadcastPacket(relayed, packet.sourceNodeId)
+        val fromNodeId = transportManager.getNodeIdForEndpoint(fromEndpointId)
+        transportManager.broadcastPacket(relayed, fromNodeId ?: packet.sourceNodeId)
         Timber.d("Relayed ${packet.packetId} via flooding")
     }
 
@@ -393,10 +390,7 @@ class MeshRoutingEngine @Inject constructor(
      * Learn routes from observed traffic.
      */
     private suspend fun updateRoutingFromPacket(packet: MeshPacket, fromEndpointId: String) {
-        val fromNodeId = transportManager.let {
-            // Get nodeId for the endpoint that sent us this packet
-            it.getConnectedNodeIds().firstOrNull() // Simplified
-        } ?: return
+        val fromNodeId = transportManager.getNodeIdForEndpoint(fromEndpointId) ?: return
 
         // The source of this packet is reachable via the node that forwarded it
         routingTable.updateRoute(

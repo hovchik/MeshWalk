@@ -13,6 +13,7 @@ import com.meshwalk.app.domain.repository.PeerRepository
 import com.meshwalk.app.mesh.group.GroupControlManager
 import com.meshwalk.app.routing.engine.MeshRoutingEngine
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import timber.log.Timber
 import java.nio.ByteBuffer
@@ -133,9 +134,20 @@ class MeshInbox @Inject constructor(
             return
         }
 
-        val peer = peerRepo.getPeer(peerNodeId)
-        val peerExchangeKey = peer?.publicExchangeKey ?: run {
-            Timber.w("No exchange public key for ${peerNodeId.take(8)}, cannot establish session")
+        // The peer's exchange key arrives asynchronously via the advertisement
+        // payload sent right after connection. Wait briefly for it to arrive
+        // rather than silently dropping the message.
+        var peerExchangeKey: ByteArray? = null
+        val deadline = System.currentTimeMillis() + 3_000L
+        while (peerExchangeKey == null && System.currentTimeMillis() < deadline) {
+            peerExchangeKey = peerRepo.getPeer(peerNodeId)?.publicExchangeKey
+            if (peerExchangeKey == null) {
+                delay(200)
+            }
+        }
+
+        if (peerExchangeKey == null) {
+            Timber.w("No exchange public key for ${peerNodeId.take(8)} after waiting, cannot establish session")
             return
         }
 

@@ -225,6 +225,13 @@ class TransportManager @Inject constructor(
         return nodeEndpointMap.keys.toSet()
     }
 
+    /**
+     * Resolve an endpoint ID to a node ID.
+     */
+    fun getNodeIdForEndpoint(endpointId: String): String? {
+        return nearbyTransport.getNodeIdForEndpoint(endpointId)
+    }
+
     // -- Event handling --
 
     /**
