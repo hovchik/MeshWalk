@@ -124,9 +124,11 @@ fun MeshWalkApp(mainViewModel: MainViewModel = hiltViewModel()) {
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentDestination = navBackStackEntry?.destination
 
+    val setupRoutes = setOf(Routes.ONBOARDING, Routes.IDENTITY_SETUP)
+    val currentRoute = currentDestination?.route
+    val showBottomBar = currentRoute != null && currentRoute !in setupRoutes
     val bottomNavRoutes = BottomNavItem.entries.map { it.route }
-    val showBottomBar = currentDestination?.route in bottomNavRoutes
-    val showTopMenu = currentDestination?.route in bottomNavRoutes
+    val showTopMenu = currentRoute in bottomNavRoutes
 
     val identity by mainViewModel.identity.collectAsState()
     val meshStatus by mainViewModel.meshStatus.collectAsState()

@@ -37,7 +37,8 @@ class MeshInbox @Inject constructor(
     private val groupControlManager: GroupControlManager,
     private val sessionManager: SessionManager,
     private val keyStorage: KeyStorage,
-    private val peerRepo: PeerRepository
+    private val peerRepo: PeerRepository,
+    private val notificationManager: MessageNotificationManager
 ) {
 
     fun start(ourNodeId: String, scope: CoroutineScope) {
@@ -101,6 +102,14 @@ class MeshInbox @Inject constructor(
         }
         conversationRepo.updateLastMessage(conversation.conversationId, preview, localMessage.timestamp)
         conversationRepo.incrementUnread(conversation.conversationId)
+
+        val senderName = senderPeer?.displayName ?: packet.sourceNodeId.take(8)
+        notificationManager.showMessageNotification(
+            conversationId = conversation.conversationId,
+            senderName = senderName,
+            messagePreview = preview,
+            isGroupMessage = false
+        )
 
         Timber.d("Received direct message from ${packet.sourceNodeId.take(8)}: ${preview.take(30)}")
     }
@@ -176,6 +185,15 @@ class MeshInbox @Inject constructor(
         }
         conversationRepo.updateLastMessage(localMessage.conversationId, preview, localMessage.timestamp)
         conversationRepo.incrementUnread(localMessage.conversationId)
+
+        val senderPeer = peerRepo.getPeer(packet.sourceNodeId)
+        val senderName = senderPeer?.displayName ?: packet.sourceNodeId.take(8)
+        notificationManager.showMessageNotification(
+            conversationId = localMessage.conversationId,
+            senderName = senderName,
+            messagePreview = preview,
+            isGroupMessage = true
+        )
 
         Timber.d("Received group message in ${groupId.take(8)} from ${packet.sourceNodeId.take(8)}")
     }
