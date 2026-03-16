@@ -393,6 +393,10 @@ fun ChatScreen(
                         senderName = senderName,
                         onResend = if (!message.isIncoming && (message.deliveryStatus == DeliveryStatus.FAILED || message.deliveryStatus == DeliveryStatus.EXPIRED)) {
                             { viewModel.resendMessage(message) }
+                        } else null,
+                        onRetry = if (!message.isIncoming && message.deliveryStatus == DeliveryStatus.PENDING &&
+                            System.currentTimeMillis() - message.timestamp > 10_000L) {
+                            { viewModel.resendMessage(message) }
                         } else null
                     )
                 }
@@ -630,7 +634,8 @@ private fun MessageBubble(
     isOutgoing: Boolean,
     showHopCount: Boolean = false,
     senderName: String? = null,
-    onResend: (() -> Unit)? = null
+    onResend: (() -> Unit)? = null,
+    onRetry: (() -> Unit)? = null
 ) {
     val alignment = if (isOutgoing) Alignment.CenterEnd else Alignment.CenterStart
     val bubbleColor = if (message.isDelayed && message.isIncoming) {
@@ -732,6 +737,17 @@ private fun MessageBubble(
                             status = message.deliveryStatus,
                             tint = textColor.copy(alpha = 0.6f)
                         )
+                        if (onRetry != null) {
+                            Spacer(modifier = Modifier.width(2.dp))
+                            Icon(
+                                Icons.Filled.Refresh,
+                                contentDescription = "Retry",
+                                modifier = Modifier
+                                    .size(16.dp)
+                                    .clickable(onClick = onRetry),
+                                tint = textColor.copy(alpha = 0.8f)
+                            )
+                        }
                     }
 
                     if (showHopCount && message.hopCount > 0) {

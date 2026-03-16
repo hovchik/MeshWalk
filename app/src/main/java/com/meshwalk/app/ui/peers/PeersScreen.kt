@@ -27,16 +27,33 @@ import javax.inject.Inject
 @HiltViewModel
 class PeersViewModel @Inject constructor(
     private val peerRepo: PeerRepository,
-    private val conversationRepo: ConversationRepository
+    private val conversationRepo: ConversationRepository,
+    private val transportManager: com.meshwalk.app.transport.manager.TransportManager
 ) : ViewModel() {
 
     val peers: StateFlow<List<PeerNode>> = peerRepo.observeNearbyPeers()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    private val _isScanning = MutableStateFlow(false)
+    val isScanning: StateFlow<Boolean> = _isScanning.asStateFlow()
+
     fun startChat(peerNodeId: String, peerDisplayName: String?, onNavigate: (conversationId: String, peerNodeId: String) -> Unit) {
         viewModelScope.launch {
             val conversation = conversationRepo.getOrCreateDirectConversation(peerNodeId, peerDisplayName)
             onNavigate(conversation.conversationId, peerNodeId)
+        }
+    }
+
+    fun rescanPeers() {
+        viewModelScope.launch {
+            _isScanning.value = true
+            try {
+                transportManager.rescanPeers()
+            } finally {
+                // Keep indicator visible briefly so user sees feedback
+                kotlinx.coroutines.delay(1500)
+                _isScanning.value = false
+            }
         }
     }
 }
@@ -47,6 +64,7 @@ fun PeersScreen(
     viewModel: PeersViewModel = hiltViewModel()
 ) {
     val peers by viewModel.peers.collectAsState()
+    val isScanning by viewModel.isScanning.collectAsState()
 
     if (peers.isEmpty()) {
         Box(
@@ -70,19 +88,61 @@ fun PeersScreen(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.outline
                 )
+                Spacer(modifier = Modifier.height(24.dp))
+                OutlinedButton(
+                    onClick = { viewModel.rescanPeers() },
+                    enabled = !isScanning
+                ) {
+                    if (isScanning) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                    }
+                    Text(if (isScanning) "Rescanning..." else "Rescan")
+                }
             }
         }
     } else {
-        Column {
-            Text(
-                text = "${peers.size} found",
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
-            )
-            LazyColumn(
-                contentPadding = PaddingValues(vertical = 4.dp)
-            ) {
+        Box(modifier = Modifier.fillMaxSize()) {
+            Column {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "${peers.size} found",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    TextButton(
+                        onClick = { viewModel.rescanPeers() },
+                        enabled = !isScanning
+                    ) {
+                        if (isScanning) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(14.dp),
+                                strokeWidth = 2.dp
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                        } else {
+                            Icon(
+                                Icons.Filled.Refresh,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                        }
+                        Text(if (isScanning) "Rescanning..." else "Rescan")
+                    }
+                }
+                LazyColumn(
+                    contentPadding = PaddingValues(vertical = 4.dp)
+                ) {
                 val directPeers = peers.filter { it.isDirect }
                 val relayPeers = peers.filter { !it.isDirect }
 
@@ -117,6 +177,7 @@ fun PeersScreen(
                         })
                     }
                 }
+            }
             }
         }
     }

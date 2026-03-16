@@ -10,7 +10,7 @@ import com.meshwalk.app.domain.repository.MessageRepository
 import com.meshwalk.app.domain.repository.PeerRepository
 import com.meshwalk.app.domain.usecase.MeshOutboxPort
 import com.meshwalk.app.routing.engine.MeshRoutingEngine
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.*
 import timber.log.Timber
 import java.nio.ByteBuffer
 import java.util.UUID
@@ -41,7 +41,23 @@ class MeshOutbox @Inject constructor(
     private val messageRepo: MessageRepository
 ) : MeshOutboxPort {
 
+    private val retryScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
     override suspend fun enqueueMessage(message: MeshMessage, recipientNodeId: String) {
+        trySendMessage(message, recipientNodeId, autoRetryAttempt = 0)
+    }
+
+    /**
+     * Core send logic. When [autoRetryAttempt] is 0 this is the initial attempt
+     * triggered by the user; on session-not-ready failures, automatic retries
+     * are scheduled with an incrementing attempt counter. The message stays
+     * PENDING during retries so the user sees the watch icon.
+     */
+    private suspend fun trySendMessage(
+        message: MeshMessage,
+        recipientNodeId: String,
+        autoRetryAttempt: Int
+    ) {
         val senderNodeId = message.senderNodeId
         val signingKey = keyStorage.getSigningPrivateKey(senderNodeId)
         if (signingKey == null) {
@@ -69,6 +85,11 @@ class MeshOutbox @Inject constructor(
                 // if the queue retry cycle exhausts all attempts without success.
                 Timber.w("Packet ${packet.packetId.take(8)} queued for later delivery (message stays PENDING)")
             }
+        } catch (e: SessionNotReadyException) {
+            // Session not ready yet — schedule automatic retry.
+            // Message stays PENDING so the user sees the watch icon.
+            Timber.w("Session not ready for message ${message.messageId.take(8)}: ${e.message}")
+            scheduleRetry(message, recipientNodeId, autoRetryAttempt + 1)
         } catch (e: Exception) {
             Timber.e(e, "Failed to encrypt/send message ${message.messageId.take(8)}")
             messageRepo.updateDeliveryStatus(message.messageId, DeliveryStatus.FAILED)
@@ -76,11 +97,48 @@ class MeshOutbox @Inject constructor(
         }
     }
 
+    /**
+     * Schedule an automatic retry for a message whose session establishment
+     * timed out. Retries up to [MAX_AUTO_RETRIES] times with increasing delays.
+     * The message stays PENDING during retries so the user sees the watch icon.
+     */
+    private fun scheduleRetry(
+        message: MeshMessage,
+        recipientNodeId: String,
+        attempt: Int
+    ) {
+        if (attempt > MAX_AUTO_RETRIES) {
+            Timber.w("Auto-retry exhausted for message ${message.messageId.take(8)}, marking FAILED")
+            retryScope.launch {
+                messageRepo.updateDeliveryStatus(message.messageId, DeliveryStatus.FAILED)
+            }
+            return
+        }
+
+        val delayMs = RETRY_DELAYS_MS[attempt - 1]
+        Timber.d("Auto-retry ${attempt}/$MAX_AUTO_RETRIES for message ${message.messageId.take(8)} in ${delayMs}ms")
+
+        retryScope.launch {
+            delay(delayMs)
+            try {
+                trySendMessage(message, recipientNodeId, autoRetryAttempt = attempt)
+            } catch (e: Exception) {
+                Timber.e(e, "Auto-retry $attempt failed for message ${message.messageId.take(8)}")
+                messageRepo.updateDeliveryStatus(message.messageId, DeliveryStatus.FAILED)
+            }
+        }
+    }
+
     companion object {
         /** Max time to wait for the peer's exchange key advertisement to arrive. */
-        private const val KEY_EXCHANGE_TIMEOUT_MS = 5_000L
+        private const val KEY_EXCHANGE_TIMEOUT_MS = 10_000L
         private const val KEY_EXCHANGE_POLL_INTERVAL_MS = 250L
+        private const val MAX_AUTO_RETRIES = 3
+        private val RETRY_DELAYS_MS = longArrayOf(3_000L, 5_000L, 8_000L)
     }
+
+    /** Thrown when the peer's exchange key has not arrived yet. */
+    class SessionNotReadyException(message: String) : Exception(message)
 
     /**
      * Ensure a pairwise session exists with the peer.
@@ -111,9 +169,8 @@ class MeshOutbox @Inject constructor(
         }
 
         if (peerExchangeKey == null) {
-            throw IllegalStateException(
-                "Waiting for key exchange with ${peerDisplayName ?: peerNodeId.take(8)}. " +
-                "Please try again in a moment."
+            throw SessionNotReadyException(
+                "Waiting for key exchange with ${peerDisplayName ?: peerNodeId.take(8)}."
             )
         }
 
