@@ -16,7 +16,8 @@ data class AppSettings(
     val notificationsEnabled: Boolean = true,
     val autoStartMesh: Boolean = true,
     val maxRelayHops: Int = 7,
-    val groupMessageHistoryCount: Int = 50
+    val groupMessageHistoryCount: Int = 50,
+    val fingerprintLockEnabled: Boolean = false
 )
 
 /**

@@ -1,5 +1,6 @@
 package com.meshwalk.app.ui.settings
 
+import androidx.biometric.BiometricManager
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -13,6 +14,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -133,6 +135,29 @@ fun SettingsScreen(
             subtitle = "Hold messages for offline recipients",
             checked = state.settings.storeAndForwardEnabled,
             onToggle = { viewModel.updateSettings { it.copy(storeAndForwardEnabled = !it.storeAndForwardEnabled) } }
+        )
+        HorizontalDivider()
+
+        // Security
+        SectionHeader("Security")
+        val context = LocalContext.current
+        val biometricAvailable = remember {
+            val biometricManager = BiometricManager.from(context)
+            biometricManager.canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG) ==
+                    BiometricManager.BIOMETRIC_SUCCESS
+        }
+        SwitchItem(
+            title = "Fingerprint lock",
+            subtitle = if (biometricAvailable) {
+                "Require fingerprint to unlock the app"
+            } else {
+                "No fingerprint enrolled on this device"
+            },
+            checked = state.settings.fingerprintLockEnabled,
+            enabled = biometricAvailable,
+            onToggle = {
+                viewModel.updateSettings { it.copy(fingerprintLockEnabled = !it.fingerprintLockEnabled) }
+            }
         )
         HorizontalDivider()
 
@@ -457,13 +482,26 @@ private fun SwitchItem(
     title: String,
     subtitle: String,
     checked: Boolean,
+    enabled: Boolean = true,
     onToggle: () -> Unit
 ) {
     ListItem(
-        headlineContent = { Text(title) },
-        supportingContent = { Text(subtitle) },
+        headlineContent = {
+            Text(
+                title,
+                color = if (enabled) MaterialTheme.colorScheme.onSurface
+                else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+            )
+        },
+        supportingContent = {
+            Text(
+                subtitle,
+                color = if (enabled) MaterialTheme.colorScheme.onSurfaceVariant
+                else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
+            )
+        },
         trailingContent = {
-            Switch(checked = checked, onCheckedChange = { onToggle() })
+            Switch(checked = checked, onCheckedChange = { onToggle() }, enabled = enabled)
         }
     )
 }

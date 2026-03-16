@@ -4,18 +4,28 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
-import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.runtime.*
 import androidx.core.content.ContextCompat
+import androidx.fragment.app.FragmentActivity
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.meshwalk.app.domain.repository.SettingsRepository
 import com.meshwalk.app.mesh.service.MeshForegroundService
 import com.meshwalk.app.ui.MeshWalkApp
+import com.meshwalk.app.ui.lock.BiometricLockScreen
 import com.meshwalk.app.ui.theme.MeshWalkTheme
 import dagger.hilt.android.AndroidEntryPoint
+import kotlinx.coroutines.flow.map
+import javax.inject.Inject
 
 @AndroidEntryPoint
-class MainActivity : ComponentActivity() {
+class MainActivity : FragmentActivity() {
+
+    @Inject lateinit var settingsRepository: SettingsRepository
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -31,7 +41,33 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             MeshWalkTheme {
-                MeshWalkApp()
+                val fingerprintEnabled by remember {
+                    settingsRepository.observeSettings().map { it.fingerprintLockEnabled }
+                }.collectAsState(initial = false)
+
+                var isUnlocked by remember { mutableStateOf(false) }
+
+                // Re-lock when the app goes to background
+                val lifecycleOwner = LocalLifecycleOwner.current
+                DisposableEffect(lifecycleOwner, fingerprintEnabled) {
+                    val observer = LifecycleEventObserver { _, event ->
+                        if (event == Lifecycle.Event.ON_STOP && fingerprintEnabled) {
+                            isUnlocked = false
+                        }
+                    }
+                    lifecycleOwner.lifecycle.addObserver(observer)
+                    onDispose {
+                        lifecycleOwner.lifecycle.removeObserver(observer)
+                    }
+                }
+
+                if (fingerprintEnabled && !isUnlocked) {
+                    BiometricLockScreen(
+                        onAuthenticated = { isUnlocked = true }
+                    )
+                } else {
+                    MeshWalkApp()
+                }
             }
         }
     }
