@@ -57,6 +57,7 @@ interface GroupRepository {
     suspend fun removeMember(groupId: String, nodeId: String)
     suspend fun deleteGroup(groupId: String)
     suspend fun applyMembershipChange(change: GroupMembershipChange)
+    suspend fun updateMemberDisplayName(nodeId: String, displayName: String?)
 }
 
 interface RoutingRepository {

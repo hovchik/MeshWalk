@@ -19,6 +19,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.meshwalk.app.domain.model.*
+import com.meshwalk.app.domain.repository.GroupRepository
 import com.meshwalk.app.domain.repository.IdentityRepository
 import com.meshwalk.app.domain.repository.SettingsRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -29,7 +30,8 @@ import javax.inject.Inject
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
     private val settingsRepo: SettingsRepository,
-    private val identityRepo: IdentityRepository
+    private val identityRepo: IdentityRepository,
+    private val groupRepo: GroupRepository
 ) : ViewModel() {
 
     data class UiState(
@@ -62,6 +64,8 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             val identity = _state.value.identity ?: return@launch
             identityRepo.updateProfile(identity.nodeId, name, type)
+            // Propagate the new display name to all group member lists
+            groupRepo.updateMemberDisplayName(identity.nodeId, name)
         }
     }
 }

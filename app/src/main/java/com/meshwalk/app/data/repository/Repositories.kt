@@ -285,6 +285,20 @@ class GroupRepositoryImpl @Inject constructor(
         groupDao.delete(groupId)
     }
 
+    override suspend fun updateMemberDisplayName(nodeId: String, displayName: String?) {
+        val allGroups = groupDao.observeAll().first()
+        for (groupEntity in allGroups) {
+            val group = groupEntity.toDomain()
+            val hasMember = group.members.any { it.nodeId == nodeId }
+            if (!hasMember) continue
+
+            val updatedMembers = group.members.map { member ->
+                if (member.nodeId == nodeId) member.copy(displayName = displayName) else member
+            }
+            updateGroup(group.copy(members = updatedMembers))
+        }
+    }
+
     override suspend fun applyMembershipChange(change: GroupMembershipChange) {
         val group = getGroup(change.groupId) ?: return
         val updated = when (change.changeType) {

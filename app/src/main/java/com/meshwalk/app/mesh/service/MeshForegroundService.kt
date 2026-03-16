@@ -26,6 +26,7 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import timber.log.Timber
@@ -95,6 +96,22 @@ class MeshForegroundService : Service() {
                 transportManager.startMesh(advertisement)
                 meshStarted = true
                 Timber.d("Mesh started for node ${identity.nodeId}")
+
+                // Observe identity changes to re-advertise when the user renames
+                identityRepository.observeActiveIdentity()
+                    .filterNotNull()
+                    .drop(1) // Skip the initial emission we already used above
+                    .collect { updatedIdentity ->
+                        val updatedAd = NodeAdvertisement(
+                            nodeId = updatedIdentity.nodeId,
+                            displayName = updatedIdentity.displayName,
+                            publicExchangeKey = updatedIdentity.publicExchangeKey,
+                            capabilities = setOf("relay", "store-forward"),
+                            protocolVersion = 1
+                        )
+                        transportManager.updateAdvertisement(updatedAd)
+                        Timber.d("Re-advertised after profile update: name=${updatedIdentity.displayName}")
+                    }
             }
         }
 
