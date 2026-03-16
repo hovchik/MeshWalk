@@ -450,6 +450,22 @@ class TransportManager @Inject constructor(
         }
     }
 
+    /**
+     * Rescan for peers: prunes stale peers, then restarts discovery and advertising
+     * on all transports. Called from the UI when the user requests a manual rescan.
+     */
+    suspend fun rescanPeers() {
+        Timber.d("Manual peer rescan triggered")
+
+        // Prune peers not seen in the last 2 minutes
+        peerRepository.pruneStale(maxAgeMs = 2 * 60 * 1000L)
+
+        // Full restart of discovery and advertising on all transports
+        restartDiscoveryAndAdvertising()
+
+        Timber.d("Peer rescan complete – discovery restarted")
+    }
+
     // -- Packet serialization --
 
     fun serializePacket(packet: MeshPacket): ByteArray {
