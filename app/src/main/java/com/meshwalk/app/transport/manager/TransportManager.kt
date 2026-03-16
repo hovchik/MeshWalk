@@ -112,6 +112,27 @@ class TransportManager @Inject constructor(
     }
 
     /**
+     * Update the node advertisement (e.g. after a profile rename) and
+     * re-advertise to all currently connected peers so they see the new name.
+     */
+    suspend fun updateAdvertisement(advertisement: NodeAdvertisement) {
+        currentAdvertisement = advertisement
+        // Re-send advertisement to all connected peers
+        val advertData = advertisement.serialize()
+        val payload = ByteArray(1 + advertData.size)
+        payload[0] = ADVERTISEMENT_MAGIC
+        advertData.copyInto(payload, 1)
+
+        for ((nodeId, endpointId) in nodeEndpointMap) {
+            val transport = endpointTransportMap[endpointId] ?: continue
+            transport.sendData(endpointId, payload).onFailure {
+                Timber.w("Failed to re-send advertisement to ${nodeId.take(8)}")
+            }
+        }
+        Timber.d("Re-advertised updated profile to ${nodeEndpointMap.size} connected peer(s)")
+    }
+
+    /**
      * Stop all mesh activity.
      */
     suspend fun stopMesh() {
