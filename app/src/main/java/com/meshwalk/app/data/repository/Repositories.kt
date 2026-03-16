@@ -27,8 +27,12 @@ class IdentityRepositoryImpl @Inject constructor(
 ) : IdentityRepository {
 
     override suspend fun createIdentity(name: String?, type: IdentityType): NodeIdentity {
+        // Use a stable, device-based node ID so the same device always has
+        // the same identity on the mesh (survives app reinstall).
+        val deviceNodeId = keyStorage.getDeviceNodeId()
         val keyPair = keyManager.generateIdentityKeyPair()
         val identity = NodeIdentity(
+            nodeId = deviceNodeId,
             displayName = name,
             identityType = type,
             publicSigningKey = keyPair.signingPublicKey,

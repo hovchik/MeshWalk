@@ -89,6 +89,7 @@ class NodeIdentityTest {
     @Test
     fun `named identity is not anonymous`() {
         val identity = NodeIdentity(
+            nodeId = "test-node-1",
             displayName = "Alice",
             identityType = IdentityType.NAMED,
             publicSigningKey = ByteArray(32),
@@ -101,6 +102,7 @@ class NodeIdentityTest {
     @Test
     fun `anonymous identity detected`() {
         val identity = NodeIdentity(
+            nodeId = "test-node-2",
             displayName = null,
             identityType = IdentityType.ANONYMOUS,
             publicSigningKey = ByteArray(32),
@@ -112,6 +114,7 @@ class NodeIdentityTest {
     @Test
     fun `temporary identity detected`() {
         val identity = NodeIdentity(
+            nodeId = "test-node-3",
             displayName = null,
             identityType = IdentityType.TEMPORARY,
             publicSigningKey = ByteArray(32),
@@ -125,6 +128,7 @@ class NodeIdentityTest {
     @Test
     fun `expired identity detected`() {
         val identity = NodeIdentity(
+            nodeId = "test-node-4",
             displayName = null,
             identityType = IdentityType.TEMPORARY,
             publicSigningKey = ByteArray(32),
@@ -137,6 +141,7 @@ class NodeIdentityTest {
     @Test
     fun `fingerprint format is correct`() {
         val identity = NodeIdentity(
+            nodeId = "test-node-5",
             displayName = "Test",
             identityType = IdentityType.NAMED,
             publicSigningKey = ByteArray(32) { it.toByte() },

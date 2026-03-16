@@ -1,6 +1,7 @@
 package com.meshwalk.app.crypto.keys
 
 import android.content.Context
+import android.provider.Settings
 import android.util.Base64
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
@@ -12,6 +13,7 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import timber.log.Timber
+import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -114,5 +116,20 @@ class KeyStorage @Inject constructor(
                 .filter { it.name.contains(nodeId) }
                 .forEach { prefs.remove(it) }
         }
+    }
+
+    /**
+     * Returns a stable, device-based node ID that persists across app reinstalls.
+     *
+     * The ID is derived from Android's ANDROID_ID (unique per device+user combination,
+     * survives app uninstall/reinstall, changes only on factory reset).
+     * This ensures the same device always gets the same node ID on the mesh network.
+     */
+    fun getDeviceNodeId(): String {
+        val androidId = Settings.Secure.getString(
+            context.contentResolver,
+            Settings.Secure.ANDROID_ID
+        )
+        return UUID.nameUUIDFromBytes("meshwalk:$androidId".toByteArray(Charsets.UTF_8)).toString()
     }
 }

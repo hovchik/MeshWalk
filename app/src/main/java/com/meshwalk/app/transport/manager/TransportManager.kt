@@ -114,10 +114,13 @@ class TransportManager @Inject constructor(
     /**
      * Update the node advertisement (e.g. after a profile rename) and
      * re-advertise to all currently connected peers so they see the new name.
+     * Also restarts Nearby/BLE advertising so newly discovering peers see
+     * the updated name instead of the stale one.
      */
     suspend fun updateAdvertisement(advertisement: NodeAdvertisement) {
         currentAdvertisement = advertisement
-        // Re-send advertisement to all connected peers
+
+        // Re-send advertisement to all connected peers via data channel
         val advertData = advertisement.serialize()
         val payload = ByteArray(1 + advertData.size)
         payload[0] = ADVERTISEMENT_MAGIC
@@ -130,6 +133,11 @@ class TransportManager @Inject constructor(
             }
         }
         Timber.d("Re-advertised updated profile to ${nodeEndpointMap.size} connected peer(s)")
+
+        // Restart Nearby and BLE advertising so the new display name is
+        // visible to peers that discover us after the rename.
+        stopAdvertising()
+        startAdvertising()
     }
 
     /**
