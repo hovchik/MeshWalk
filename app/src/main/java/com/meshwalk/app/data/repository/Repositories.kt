@@ -27,8 +27,12 @@ class IdentityRepositoryImpl @Inject constructor(
 ) : IdentityRepository {
 
     override suspend fun createIdentity(name: String?, type: IdentityType): NodeIdentity {
+        // Use a stable, device-based node ID so the same device always has
+        // the same identity on the mesh (survives app reinstall).
+        val deviceNodeId = keyStorage.getDeviceNodeId()
         val keyPair = keyManager.generateIdentityKeyPair()
         val identity = NodeIdentity(
+            nodeId = deviceNodeId,
             displayName = name,
             identityType = type,
             publicSigningKey = keyPair.signingPublicKey,
@@ -416,6 +420,7 @@ class SettingsRepositoryImpl @Inject constructor(
         private val SHOW_ENCRYPTION_BADGE = booleanPreferencesKey("show_encryption_badge")
         private val GROUP_MESSAGE_HISTORY_COUNT = intPreferencesKey("group_message_history_count")
         private val ONBOARDING_DONE = booleanPreferencesKey("onboarding_done")
+        private val FINGERPRINT_LOCK_ENABLED = booleanPreferencesKey("fingerprint_lock_enabled")
     }
 
     override fun observeSettings(): Flow<AppSettings> {
@@ -438,6 +443,7 @@ class SettingsRepositoryImpl @Inject constructor(
             prefs[SHOW_HOP_COUNT] = settings.showHopCount
             prefs[SHOW_ENCRYPTION_BADGE] = settings.showEncryptionBadge
             prefs[GROUP_MESSAGE_HISTORY_COUNT] = settings.groupMessageHistoryCount
+            prefs[FINGERPRINT_LOCK_ENABLED] = settings.fingerprintLockEnabled
         }
     }
 
@@ -463,6 +469,7 @@ class SettingsRepositoryImpl @Inject constructor(
         messageTtl = this[MESSAGE_TTL] ?: MeshPacket.DEFAULT_TTL,
         showHopCount = this[SHOW_HOP_COUNT] ?: false,
         showEncryptionBadge = this[SHOW_ENCRYPTION_BADGE] ?: true,
-        groupMessageHistoryCount = this[GROUP_MESSAGE_HISTORY_COUNT] ?: 50
+        groupMessageHistoryCount = this[GROUP_MESSAGE_HISTORY_COUNT] ?: 50,
+        fingerprintLockEnabled = this[FINGERPRINT_LOCK_ENABLED] ?: false
     )
 }

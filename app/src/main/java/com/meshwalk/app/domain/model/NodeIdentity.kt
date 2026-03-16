@@ -1,13 +1,15 @@
 package com.meshwalk.app.domain.model
 
-import java.util.UUID
-
 /**
  * Represents a node's identity in the mesh network.
  * Every device running MeshWalk has exactly one active identity at a time.
+ *
+ * The [nodeId] is a stable, device-based identifier derived from the device's
+ * ANDROID_ID. It persists across app reinstalls so the same device always
+ * appears as the same node on the mesh.
  */
 data class NodeIdentity(
-    val nodeId: String = UUID.randomUUID().toString(),
+    val nodeId: String,
     val displayName: String?,
     val identityType: IdentityType,
     val publicSigningKey: ByteArray,

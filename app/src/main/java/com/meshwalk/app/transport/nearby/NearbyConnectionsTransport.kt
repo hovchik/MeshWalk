@@ -262,7 +262,9 @@ class NearbyConnectionsTransport @Inject constructor(
 
     override suspend fun stopAdvertising() {
         connectionsClient.stopAdvertising()
-        currentAdvertisement = null
+        // Note: currentAdvertisement is intentionally preserved so that
+        // requestConnection() can still use the latest name during brief
+        // stop/restart cycles (e.g. after a profile rename).
         Timber.d("Advertising stopped")
     }
 
