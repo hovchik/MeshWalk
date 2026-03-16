@@ -35,6 +35,7 @@ class QueuedMessageHandler @Inject constructor(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var flushJob: Job? = null
     private var isFlushActive = false
+    private val flushLock = Any()
 
     private val _events = MutableSharedFlow<QueueFlushEvent>(extraBufferCapacity = 32)
     val events: SharedFlow<QueueFlushEvent> = _events
@@ -50,7 +51,7 @@ class QueuedMessageHandler @Inject constructor(
      * Starts the Fibonacci retry cycle if not already running.
      */
     fun onMessageQueued() {
-        synchronized(this) {
+        synchronized(flushLock) {
             if (flushJob?.isActive == true) {
                 Timber.d("Queue flush cycle already running")
                 return
@@ -64,9 +65,11 @@ class QueuedMessageHandler @Inject constructor(
      * and resets the Fibonacci cycle since connectivity changed.
      */
     fun onConnectivityRestored() {
-        // Cancel current cycle — connectivity change may resolve everything
-        flushJob?.cancel()
-        flushJob = null
+        synchronized(flushLock) {
+            // Cancel current cycle — connectivity change may resolve everything
+            flushJob?.cancel()
+            flushJob = null
+        }
 
         if (offlineQueue.size() == 0) return
 
@@ -76,7 +79,9 @@ class QueuedMessageHandler @Inject constructor(
             val remaining = tryFlush()
             if (remaining > 0) {
                 // Still messages left — restart cycle from beginning
-                startFlushCycle()
+                synchronized(flushLock) {
+                    startFlushCycle()
+                }
             }
         }
     }
@@ -85,78 +90,86 @@ class QueuedMessageHandler @Inject constructor(
      * Stop all pending flush attempts. Called when mesh is stopped.
      */
     fun cancel() {
-        flushJob?.cancel()
-        flushJob = null
-        isFlushActive = false
+        synchronized(flushLock) {
+            flushJob?.cancel()
+            flushJob = null
+            isFlushActive = false
+        }
         Timber.d("Queued message handler cancelled")
     }
 
+    /** Must be called while holding [flushLock]. */
     private fun startFlushCycle() {
         isFlushActive = true
         var attemptIndex = 0
 
         flushJob = scope.launch {
-            while (isFlushActive && attemptIndex < MAX_ATTEMPTS && offlineQueue.size() > 0) {
-                val delayMs = fibonacciDelay(attemptIndex)
-                val queueSize = offlineQueue.size()
+            try {
+                while (isFlushActive && attemptIndex < MAX_ATTEMPTS && offlineQueue.size() > 0) {
+                    val delayMs = fibonacciDelay(attemptIndex)
+                    val queueSize = offlineQueue.size()
 
-                Timber.d("Queue flush attempt ${attemptIndex + 1}/$MAX_ATTEMPTS in ${delayMs}ms ($queueSize messages queued)")
-                _events.emit(
-                    QueueFlushEvent.FlushScheduled(
-                        attempt = attemptIndex + 1,
-                        maxAttempts = MAX_ATTEMPTS,
-                        delayMs = delayMs,
-                        queuedCount = queueSize
+                    Timber.d("Queue flush attempt ${attemptIndex + 1}/$MAX_ATTEMPTS in ${delayMs}ms ($queueSize messages queued)")
+                    _events.emit(
+                        QueueFlushEvent.FlushScheduled(
+                            attempt = attemptIndex + 1,
+                            maxAttempts = MAX_ATTEMPTS,
+                            delayMs = delayMs,
+                            queuedCount = queueSize
+                        )
                     )
-                )
 
-                delay(delayMs)
+                    delay(delayMs)
 
-                // Step 1: Trigger reconnect to find peers
-                Timber.d("Queue flush: triggering reconnect (attempt ${attemptIndex + 1})")
-                _events.emit(
-                    QueueFlushEvent.ReconnectAttempting(attemptIndex + 1, offlineQueue.size())
-                )
-                try {
-                    onReconnectForQueue?.invoke()
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    Timber.w(e, "Queue flush reconnect failed")
+                    // Step 1: Trigger reconnect to find peers
+                    Timber.d("Queue flush: triggering reconnect (attempt ${attemptIndex + 1})")
+                    _events.emit(
+                        QueueFlushEvent.ReconnectAttempting(attemptIndex + 1, offlineQueue.size())
+                    )
+                    try {
+                        onReconnectForQueue?.invoke()
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        Timber.w(e, "Queue flush reconnect failed")
+                    }
+
+                    // Brief pause for discovery to find peers
+                    delay(2_000)
+
+                    // Step 2: Attempt to flush queued messages
+                    val remaining = tryFlush()
+
+                    _events.emit(
+                        QueueFlushEvent.FlushCompleted(
+                            attempt = attemptIndex + 1,
+                            sentCount = queueSize - remaining,
+                            remainingCount = remaining
+                        )
+                    )
+
+                    if (remaining == 0) {
+                        Timber.d("Queue fully drained after ${attemptIndex + 1} attempts")
+                        _events.emit(QueueFlushEvent.QueueDrained(attemptIndex + 1))
+                        break
+                    }
+
+                    attemptIndex++
                 }
 
-                // Brief pause for discovery to find peers
-                delay(2_000)
-
-                // Step 2: Attempt to flush queued messages
-                val remaining = tryFlush()
-
-                _events.emit(
-                    QueueFlushEvent.FlushCompleted(
-                        attempt = attemptIndex + 1,
-                        sentCount = queueSize - remaining,
-                        remainingCount = remaining
+                if (offlineQueue.size() > 0 && attemptIndex >= MAX_ATTEMPTS) {
+                    val remainingPacketIds = offlineQueue.getAll().map { it.packetId }
+                    Timber.w("Queue flush gave up after $MAX_ATTEMPTS attempts, ${offlineQueue.size()} messages remaining")
+                    _events.emit(
+                        QueueFlushEvent.GaveUp(MAX_ATTEMPTS, offlineQueue.size(), remainingPacketIds)
                     )
-                )
-
-                if (remaining == 0) {
-                    Timber.d("Queue fully drained after ${attemptIndex + 1} attempts")
-                    _events.emit(QueueFlushEvent.QueueDrained(attemptIndex + 1))
-                    break
                 }
-
-                attemptIndex++
+            } finally {
+                synchronized(flushLock) {
+                    isFlushActive = false
+                    flushJob = null
+                }
             }
-
-            if (offlineQueue.size() > 0 && attemptIndex >= MAX_ATTEMPTS) {
-                Timber.w("Queue flush gave up after $MAX_ATTEMPTS attempts, ${offlineQueue.size()} messages remaining")
-                _events.emit(
-                    QueueFlushEvent.GaveUp(MAX_ATTEMPTS, offlineQueue.size())
-                )
-            }
-
-            isFlushActive = false
-            flushJob = null
         }
     }
 
@@ -222,5 +235,9 @@ sealed interface QueueFlushEvent {
     data class QueueDrained(val totalAttempts: Int) : QueueFlushEvent
 
     /** All flush attempts exhausted, messages still remain. */
-    data class GaveUp(val totalAttempts: Int, val remainingCount: Int) : QueueFlushEvent
+    data class GaveUp(
+        val totalAttempts: Int,
+        val remainingCount: Int,
+        val remainingPacketIds: List<String> = emptyList()
+    ) : QueueFlushEvent
 }

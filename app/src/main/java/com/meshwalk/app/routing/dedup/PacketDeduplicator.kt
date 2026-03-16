@@ -48,6 +48,15 @@ class PacketDeduplicator @Inject constructor() {
     }
 
     /**
+     * Remove a specific packet from the dedup cache.
+     * Used when a packet couldn't be processed (e.g. session not ready)
+     * and should be allowed to be re-processed on arrival.
+     */
+    fun clearPacket(packetId: String) {
+        seenPackets.remove(packetId)
+    }
+
+    /**
      * Remove expired entries from the cache.
      */
     fun pruneExpired() {
