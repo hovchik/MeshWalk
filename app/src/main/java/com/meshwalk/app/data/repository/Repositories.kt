@@ -65,7 +65,16 @@ class IdentityRepositoryImpl @Inject constructor(
     }
 
     override suspend fun updateProfile(nodeId: String, name: String?, type: IdentityType) {
-        identityDao.updateProfile(nodeId, name, type.name)
+        val expiresAt = if (type == IdentityType.TEMPORARY) {
+            // Preserve existing expiry if already temporary, otherwise set 24h from now
+            val existing = identityDao.getActive()
+            if (existing?.identityType == IdentityType.TEMPORARY.name && existing.expiresAt != null) {
+                existing.expiresAt
+            } else {
+                System.currentTimeMillis() + 24 * 3600 * 1000
+            }
+        } else null
+        identityDao.updateProfile(nodeId, name, type.name, expiresAt)
     }
 
     override fun observeActiveIdentity(): Flow<NodeIdentity?> {

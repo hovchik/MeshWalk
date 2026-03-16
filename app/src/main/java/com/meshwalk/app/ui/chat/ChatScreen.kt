@@ -31,6 +31,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.meshwalk.app.domain.model.*
 import com.meshwalk.app.domain.repository.*
+import com.meshwalk.app.domain.usecase.MeshOutboxPort
 import com.meshwalk.app.domain.usecase.SendGroupMessageUseCase
 import com.meshwalk.app.domain.usecase.SendMessageUseCase
 import com.meshwalk.app.mesh.group.GroupControlManager
@@ -52,7 +53,8 @@ class ChatViewModel @Inject constructor(
     private val groupRepo: GroupRepository,
     private val sendMessage: SendMessageUseCase,
     private val sendGroupMessage: SendGroupMessageUseCase,
-    private val groupControlManager: GroupControlManager
+    private val groupControlManager: GroupControlManager,
+    private val meshOutbox: MeshOutboxPort
 ) : ViewModel() {
 
     private val conversationId: String = savedStateHandle["conversationId"] ?: ""
@@ -223,6 +225,35 @@ class ChatViewModel @Inject constructor(
         }
     }
 
+    fun resendMessage(message: MeshMessage) {
+        viewModelScope.launch {
+            _state.value = _state.value.copy(sendError = null)
+            try {
+                // Reset status to PENDING before retrying
+                messageRepo.updateDeliveryStatus(message.messageId, DeliveryStatus.PENDING)
+
+                val text = when (val content = message.content) {
+                    is MessageContent.Text -> content.text
+                    is MessageContent.SystemEvent -> return@launch // Don't resend system events
+                }
+
+                if (_state.value.isGroupChat) {
+                    val group = groupRepo.getGroup(message.conversationId) ?: return@launch
+                    val recipientNodeIds = group.members
+                        .filter { it.nodeId != _state.value.selfNodeId }
+                        .map { it.nodeId }
+                    meshOutbox.enqueueGroupMessage(message, recipientNodeIds, group.groupId)
+                } else {
+                    meshOutbox.enqueueMessage(message, peerNodeId)
+                }
+            } catch (e: Exception) {
+                _state.value = _state.value.copy(
+                    sendError = e.message ?: "Failed to resend message"
+                )
+            }
+        }
+    }
+
     fun clearSendError() {
         _state.value = _state.value.copy(sendError = null)
     }
@@ -359,7 +390,10 @@ fun ChatScreen(
                         message = message,
                         isOutgoing = !message.isIncoming,
                         showHopCount = state.showHopCount,
-                        senderName = senderName
+                        senderName = senderName,
+                        onResend = if (!message.isIncoming && (message.deliveryStatus == DeliveryStatus.FAILED || message.deliveryStatus == DeliveryStatus.EXPIRED)) {
+                            { viewModel.resendMessage(message) }
+                        } else null
                     )
                 }
             }
@@ -595,7 +629,8 @@ private fun MessageBubble(
     message: MeshMessage,
     isOutgoing: Boolean,
     showHopCount: Boolean = false,
-    senderName: String? = null
+    senderName: String? = null,
+    onResend: (() -> Unit)? = null
 ) {
     val alignment = if (isOutgoing) Alignment.CenterEnd else Alignment.CenterStart
     val bubbleColor = if (message.isDelayed && message.isIncoming) {
@@ -706,6 +741,33 @@ private fun MessageBubble(
                             style = MaterialTheme.typography.labelSmall,
                             color = textColor.copy(alpha = 0.4f)
                         )
+                    }
+                }
+
+                if (onResend != null) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Surface(
+                        onClick = onResend,
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.errorContainer
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                Icons.Filled.Refresh,
+                                contentDescription = "Resend",
+                                modifier = Modifier.size(14.dp),
+                                tint = MaterialTheme.colorScheme.onErrorContainer
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = "Tap to resend",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onErrorContainer
+                            )
+                        }
                     }
                 }
             }

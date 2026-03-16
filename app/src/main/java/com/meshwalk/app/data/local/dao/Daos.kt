@@ -27,8 +27,8 @@ interface IdentityDao {
     @Query("UPDATE identities SET displayName = :name WHERE nodeId = :nodeId")
     suspend fun updateDisplayName(nodeId: String, name: String?)
 
-    @Query("UPDATE identities SET identityType = :type, displayName = :name WHERE nodeId = :nodeId")
-    suspend fun updateProfile(nodeId: String, name: String?, type: String)
+    @Query("UPDATE identities SET identityType = :type, displayName = :name, expiresAt = :expiresAt WHERE nodeId = :nodeId")
+    suspend fun updateProfile(nodeId: String, name: String?, type: String, expiresAt: Long?)
 
     @Query("DELETE FROM identities WHERE nodeId = :nodeId")
     suspend fun delete(nodeId: String)
