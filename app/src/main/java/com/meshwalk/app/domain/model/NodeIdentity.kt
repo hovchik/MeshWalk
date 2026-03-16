@@ -30,10 +30,19 @@ data class NodeIdentity(
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
         if (other !is NodeIdentity) return false
-        return nodeId == other.nodeId
+        return nodeId == other.nodeId &&
+                displayName == other.displayName &&
+                identityType == other.identityType &&
+                expiresAt == other.expiresAt
     }
 
-    override fun hashCode(): Int = nodeId.hashCode()
+    override fun hashCode(): Int {
+        var result = nodeId.hashCode()
+        result = 31 * result + (displayName?.hashCode() ?: 0)
+        result = 31 * result + identityType.hashCode()
+        result = 31 * result + (expiresAt?.hashCode() ?: 0)
+        return result
+    }
 }
 
 enum class IdentityType {
