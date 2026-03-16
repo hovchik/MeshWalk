@@ -11,6 +11,7 @@ import com.meshwalk.app.domain.repository.ConversationRepository
 import com.meshwalk.app.domain.repository.MessageRepository
 import com.meshwalk.app.domain.repository.PeerRepository
 import com.meshwalk.app.mesh.group.GroupControlManager
+import com.meshwalk.app.routing.dedup.PacketDeduplicator
 import com.meshwalk.app.routing.engine.MeshRoutingEngine
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
@@ -39,12 +40,16 @@ class MeshInbox @Inject constructor(
     private val sessionManager: SessionManager,
     private val keyStorage: KeyStorage,
     private val peerRepo: PeerRepository,
-    private val notificationManager: MessageNotificationManager
+    private val notificationManager: MessageNotificationManager,
+    private val deduplicator: PacketDeduplicator
 ) {
 
     companion object {
         /** If a message arrives more than 30 seconds after it was sent, mark it as delayed. */
         private const val DELAYED_THRESHOLD_MS = 30_000L
+        /** Max time to wait for peer's exchange key to arrive (matches outbox timeout). */
+        private const val KEY_EXCHANGE_TIMEOUT_MS = 5_000L
+        private const val KEY_EXCHANGE_POLL_INTERVAL_MS = 250L
     }
 
     fun start(ourNodeId: String, scope: CoroutineScope) {
@@ -66,6 +71,12 @@ class MeshInbox @Inject constructor(
                             Timber.d("Ignoring packet type: ${packet.packetType}")
                         }
                     }
+                } catch (e: SessionNotReadyException) {
+                    // Session couldn't be established — clear dedup so this packet
+                    // can be re-processed if it arrives again via another path or
+                    // after the advertisement with the exchange key arrives.
+                    deduplicator.clearPacket(packet.packetId)
+                    Timber.w("Session not ready for packet ${packet.packetId.take(8)}, cleared dedup for retry")
                 } catch (e: Exception) {
                     Timber.e(e, "Error processing incoming packet ${packet.packetId}")
                 }
@@ -78,8 +89,14 @@ class MeshInbox @Inject constructor(
         packet: com.meshwalk.app.domain.model.MeshPacket,
         ourNodeId: String
     ) {
-        // Ensure we have a session with the sender before decrypting
-        ensureSession(ourNodeId, packet.sourceNodeId)
+        // Ensure we have a session with the sender before decrypting.
+        // If session establishment fails, we cannot decrypt — but the packet is
+        // already dedup-marked, so we must NOT silently drop it. Throw a
+        // SessionNotReadyException so the collector can clear the dedup entry
+        // and allow re-processing when the exchange key arrives.
+        if (!ensureSession(ourNodeId, packet.sourceNodeId)) {
+            throw SessionNotReadyException("Cannot establish session with ${packet.sourceNodeId.take(8)}")
+        }
 
         val message = envelopeManager.decryptFromPeer(packet, ourNodeId)
         if (message == null) {
@@ -125,39 +142,49 @@ class MeshInbox @Inject constructor(
     /**
      * Ensure a pairwise session exists with the peer (needed for decryption).
      * Mirror of MeshOutbox.ensureSession().
+     *
+     * @return true if a session is available, false if establishment failed.
+     *         When false is returned, the caller should NOT attempt decryption
+     *         and should allow the packet to be re-processed later.
      */
-    private suspend fun ensureSession(ourNodeId: String, peerNodeId: String) {
-        if (sessionManager.hasSession(ourNodeId, peerNodeId)) return
+    private suspend fun ensureSession(ourNodeId: String, peerNodeId: String): Boolean {
+        if (sessionManager.hasSession(ourNodeId, peerNodeId)) return true
 
         val ourExchangeKey = keyStorage.getExchangePrivateKey(ourNodeId) ?: run {
             Timber.w("No exchange private key for $ourNodeId, cannot establish session")
-            return
+            return false
         }
 
         // The peer's exchange key arrives asynchronously via the advertisement
-        // payload sent right after connection. Wait briefly for it to arrive
-        // rather than silently dropping the message.
+        // payload sent right after connection. Wait for it to arrive, using the
+        // same timeout as the outbox (5 seconds) to handle mesh network latency.
         var peerExchangeKey: ByteArray? = null
-        val deadline = System.currentTimeMillis() + 3_000L
+        val deadline = System.currentTimeMillis() + KEY_EXCHANGE_TIMEOUT_MS
         while (peerExchangeKey == null && System.currentTimeMillis() < deadline) {
             peerExchangeKey = peerRepo.getPeer(peerNodeId)?.publicExchangeKey
             if (peerExchangeKey == null) {
-                delay(200)
+                delay(KEY_EXCHANGE_POLL_INTERVAL_MS)
             }
         }
 
         if (peerExchangeKey == null) {
-            Timber.w("No exchange public key for ${peerNodeId.take(8)} after waiting, cannot establish session")
-            return
+            Timber.w("No exchange public key for ${peerNodeId.take(8)} after ${KEY_EXCHANGE_TIMEOUT_MS}ms, cannot establish session")
+            return false
         }
 
-        sessionManager.establishSessionWithKeys(
-            ourNodeId = ourNodeId,
-            peerNodeId = peerNodeId,
-            ourExchangePrivateKey = ourExchangeKey,
-            peerPublicExchangeKey = peerExchangeKey
-        )
-        Timber.d("Auto-established session with ${peerNodeId.take(8)} for receiving")
+        return try {
+            sessionManager.establishSessionWithKeys(
+                ourNodeId = ourNodeId,
+                peerNodeId = peerNodeId,
+                ourExchangePrivateKey = ourExchangeKey,
+                peerPublicExchangeKey = peerExchangeKey
+            )
+            Timber.d("Auto-established session with ${peerNodeId.take(8)} for receiving")
+            true
+        } catch (e: Exception) {
+            Timber.e(e, "Failed to establish session with ${peerNodeId.take(8)}")
+            false
+        }
     }
 
     private suspend fun handleGroupMessage(
@@ -240,3 +267,9 @@ class MeshInbox @Inject constructor(
         }
     }
 }
+
+/**
+ * Thrown when a session cannot be established for decryption.
+ * The caller should clear the dedup entry so the packet can be re-processed later.
+ */
+class SessionNotReadyException(message: String) : Exception(message)

@@ -7,10 +7,13 @@ import com.meshwalk.app.domain.repository.ConversationRepository
 import com.meshwalk.app.domain.repository.GroupRepository
 import com.meshwalk.app.domain.repository.MessageRepository
 import com.meshwalk.app.domain.usecase.MeshOutboxPort
+import com.meshwalk.app.routing.queue.OfflineQueue
 import com.meshwalk.app.transport.api.TransportEvent
 import com.meshwalk.app.transport.manager.TransportManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import timber.log.Timber
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -32,13 +35,20 @@ class MessageResendManager @Inject constructor(
     private val messageRepo: MessageRepository,
     private val conversationRepo: ConversationRepository,
     private val groupRepo: GroupRepository,
-    private val meshOutbox: MeshOutboxPort
+    private val meshOutbox: MeshOutboxPort,
+    private val offlineQueue: OfflineQueue
 ) {
 
     companion object {
         /** PENDING messages older than this are considered stale and should be resent. */
         private const val STALE_PENDING_THRESHOLD_MS = 30_000L
     }
+
+    /** Prevents concurrent resend attempts for the same peer. */
+    private val resendMutex = Mutex()
+
+    /** Tracks peers currently being resent to, so we skip duplicate Connected events. */
+    private val activeResends = mutableSetOf<String>()
 
     fun start(ourNodeId: String, scope: CoroutineScope) {
         scope.launch {
@@ -52,21 +62,55 @@ class MessageResendManager @Inject constructor(
     }
 
     private suspend fun resendUndeliveredMessages(ourNodeId: String, peerNodeId: String) {
-        val failedMessages = messageRepo.getFailedMessagesForPeer(peerNodeId)
-        val stalePendingMessages = messageRepo.getStalePendingMessagesForPeer(
-            peerNodeId,
-            System.currentTimeMillis() - STALE_PENDING_THRESHOLD_MS
-        )
+        // Guard against concurrent resends for the same peer (e.g. rapid Connected events)
+        resendMutex.withLock {
+            if (activeResends.contains(peerNodeId)) {
+                Timber.d("Resend already in progress for ${peerNodeId.take(8)}, skipping")
+                return
+            }
+            activeResends.add(peerNodeId)
+        }
 
-        val messagesToResend = (failedMessages + stalePendingMessages)
-            .distinctBy { it.messageId }
+        try {
+            val failedMessages = messageRepo.getFailedMessagesForPeer(peerNodeId)
+            val stalePendingMessages = messageRepo.getStalePendingMessagesForPeer(
+                peerNodeId,
+                System.currentTimeMillis() - STALE_PENDING_THRESHOLD_MS
+            )
 
-        if (messagesToResend.isEmpty()) return
+            val messagesToResend = (failedMessages + stalePendingMessages)
+                .distinctBy { it.messageId }
 
-        Timber.d("Peer ${peerNodeId.take(8)} reconnected, resending ${messagesToResend.size} undelivered message(s) (${failedMessages.size} failed, ${stalePendingMessages.size} stale pending)")
+            if (messagesToResend.isEmpty()) return
 
-        for (message in messagesToResend) {
-            resendMessage(ourNodeId, peerNodeId, message)
+            Timber.d("Peer ${peerNodeId.take(8)} reconnected, resending ${messagesToResend.size} undelivered message(s) (${failedMessages.size} failed, ${stalePendingMessages.size} stale pending)")
+
+            // Clear any stale queued packets for this peer before re-encrypting,
+            // to prevent the offline queue from also delivering the old packets.
+            clearQueuedPacketsForPeer(peerNodeId)
+
+            for (message in messagesToResend) {
+                resendMessage(ourNodeId, peerNodeId, message)
+            }
+        } finally {
+            resendMutex.withLock {
+                activeResends.remove(peerNodeId)
+            }
+        }
+    }
+
+    /**
+     * Remove stale queued packets destined for this peer.
+     * Prevents the offline queue from delivering old packets at the same time
+     * the resend manager is creating fresh ones with up-to-date encryption.
+     */
+    private fun clearQueuedPacketsForPeer(peerNodeId: String) {
+        val stalePackets = offlineQueue.getPacketsForDestination(peerNodeId)
+        for (packet in stalePackets) {
+            offlineQueue.remove(packet.packetId)
+        }
+        if (stalePackets.isNotEmpty()) {
+            Timber.d("Cleared ${stalePackets.size} stale queued packet(s) for ${peerNodeId.take(8)} before resend")
         }
     }
 

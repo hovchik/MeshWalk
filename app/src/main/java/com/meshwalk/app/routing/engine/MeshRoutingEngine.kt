@@ -59,6 +59,11 @@ class MeshRoutingEngine @Inject constructor(
     private val _routingEvents = MutableSharedFlow<RoutingDiagnosticEvent>(extraBufferCapacity = 32)
     val routingEvents: SharedFlow<RoutingDiagnosticEvent> = _routingEvents
 
+    // Emits packet IDs that the queue handler gave up on, so the message layer
+    // can mark the corresponding messages as FAILED instead of stuck PENDING.
+    private val _abandonedPackets = MutableSharedFlow<List<String>>(extraBufferCapacity = 8)
+    val abandonedPackets: SharedFlow<List<String>> = _abandonedPackets
+
     private var selfNodeId: String? = null
     private var isRunning = false
 
@@ -121,10 +126,16 @@ class MeshRoutingEngine @Inject constructor(
                         ))
                     is QueueFlushEvent.QueueDrained ->
                         emitDiagnostic(RoutingDiagnosticEvent.QueueDrained(event.totalAttempts))
-                    is QueueFlushEvent.GaveUp ->
+                    is QueueFlushEvent.GaveUp -> {
                         emitDiagnostic(RoutingDiagnosticEvent.QueueFlushGaveUp(
                             event.totalAttempts, event.remainingCount
                         ))
+                        // Emit abandoned packet IDs so the message layer can mark
+                        // corresponding messages as FAILED instead of stuck PENDING.
+                        if (event.remainingPacketIds.isNotEmpty()) {
+                            _abandonedPackets.emit(event.remainingPacketIds)
+                        }
+                    }
                     else -> {}
                 }
             }
@@ -302,15 +313,17 @@ class MeshRoutingEngine @Inject constructor(
             }
         }
 
-        // Also try packets with no known route (flood to new peer)
+        // Also try forwarding unroutable packets via the new peer (relay).
+        // Remove from queue after forwarding — the packet is now the relay's
+        // responsibility. Keeping it would cause duplicate sends on every
+        // future connection event.
         val unroutable = offlineQueue.getAll()
         unroutable.forEach { packet ->
             if (packet.destinationNodeId != newPeerNodeId) {
-                // This new peer might be closer to the destination
                 val sent = transportManager.sendPacket(packet, newPeerNodeId)
                 if (sent) {
-                    offlineQueue.markRetry(packet.packetId)
-                    Timber.d("Forwarded queued ${packet.packetId} via new peer $newPeerNodeId")
+                    offlineQueue.remove(packet.packetId)
+                    Timber.d("Forwarded queued ${packet.packetId} via new peer $newPeerNodeId, removed from queue")
                 }
             }
         }
@@ -353,11 +366,12 @@ class MeshRoutingEngine @Inject constructor(
                 }
             }
 
-            // Try flooding to any connected peer
+            // Try flooding to any connected peer (relay).
+            // Remove from queue once forwarded — the relay peer is now responsible.
             connectedPeers.firstOrNull()?.let { peerId ->
                 val sent = transportManager.sendPacket(packet, peerId)
                 if (sent) {
-                    offlineQueue.markRetry(packet.packetId)
+                    offlineQueue.remove(packet.packetId)
                     sentCount++
                     Timber.d("Queue flush: flooded ${packet.packetId} via $peerId")
                 }

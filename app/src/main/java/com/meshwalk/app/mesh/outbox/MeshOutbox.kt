@@ -64,7 +64,10 @@ class MeshOutbox @Inject constructor(
             if (sent) {
                 messageRepo.updateDeliveryStatus(message.messageId, DeliveryStatus.SENT)
             } else {
-                Timber.w("Packet ${packet.packetId.take(8)} queued for later delivery")
+                // Packet was queued for store-and-forward delivery.
+                // Keep status as PENDING so the MessageResendManager can pick it up
+                // if the queue retry cycle exhausts all attempts without success.
+                Timber.w("Packet ${packet.packetId.take(8)} queued for later delivery (message stays PENDING)")
             }
         } catch (e: Exception) {
             Timber.e(e, "Failed to encrypt/send message ${message.messageId.take(8)}")
