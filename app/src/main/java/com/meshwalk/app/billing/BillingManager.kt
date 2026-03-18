@@ -105,7 +105,7 @@ class BillingManager @Inject constructor(
 
             // Mirror provider state
             _subscriptionState.value = gpProvider.subscriptionState.value
-            _availablePlans.value = gpProvider.availablePlans.value
+            _availablePlans.value = gpProvider.availablePlans.value.ifEmpty { defaultPlans() }
 
             Timber.d("Google Play Billing initialized successfully")
         } catch (e: Exception) {
@@ -127,7 +127,7 @@ class BillingManager @Inject constructor(
         }.launchIn(scope)
 
         googlePlayProvider?.availablePlans?.onEach { plans ->
-            _availablePlans.value = plans
+            _availablePlans.value = plans.ifEmpty { defaultPlans() }
         }?.launchIn(scope)
     }
 
