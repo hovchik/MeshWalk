@@ -22,7 +22,9 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.compose.foundation.shape.RoundedCornerShape
 import com.meshwalk.app.billing.BillingManager
+import com.meshwalk.app.billing.BillingPeriod
 import com.meshwalk.app.billing.FeatureGate
+import com.meshwalk.app.billing.PlanDetails
 import com.meshwalk.app.billing.SubscriptionState
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -43,14 +45,16 @@ class SettingsViewModel @Inject constructor(
     private val identityRepo: IdentityRepository,
     private val groupRepo: GroupRepository,
     private val transportManager: TransportManagerPort,
-    val featureGate: FeatureGate
+    val featureGate: FeatureGate,
+    private val billingManager: BillingManager
 ) : ViewModel() {
 
     data class UiState(
         val settings: AppSettings = AppSettings(),
         val identity: NodeIdentity? = null,
         val isScanning: Boolean = false,
-        val subscriptionState: SubscriptionState = SubscriptionState()
+        val subscriptionState: SubscriptionState = SubscriptionState(),
+        val availablePlans: List<PlanDetails> = emptyList()
     )
 
     private val _state = MutableStateFlow(UiState())
@@ -62,13 +66,15 @@ class SettingsViewModel @Inject constructor(
                 settingsRepo.observeSettings(),
                 identityRepo.observeActiveIdentity(),
                 transportManager.isScanning,
-                featureGate.subscriptionState
-            ) { settings, identity, scanning, subscription ->
+                featureGate.subscriptionState,
+                billingManager.availablePlans
+            ) { settings, identity, scanning, subscription, plans ->
                 UiState(
                     settings = settings,
                     identity = identity,
                     isScanning = scanning,
-                    subscriptionState = subscription
+                    subscriptionState = subscription,
+                    availablePlans = plans
                 )
             }.collect { _state.value = it }
         }
@@ -122,6 +128,7 @@ fun SettingsScreen(
         SubscriptionInfoCard(
             subscriptionState = state.subscriptionState,
             featureGate = viewModel.featureGate,
+            availablePlans = state.availablePlans,
             onManage = onSubscription
         )
         HorizontalDivider()
@@ -619,6 +626,7 @@ private fun IdentityTypeOption(
 private fun SubscriptionInfoCard(
     subscriptionState: SubscriptionState,
     featureGate: FeatureGate,
+    availablePlans: List<PlanDetails>,
     onManage: () -> Unit
 ) {
     Card(
@@ -727,6 +735,29 @@ private fun SubscriptionInfoCard(
                 )
             }
 
+            // Available packages
+            if (availablePlans.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(12.dp))
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Text(
+                    if (subscriptionState.isActive) "All plans" else "Available packages",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+
+                availablePlans.forEach { plan ->
+                    val isCurrentPlan = subscriptionState.isActive &&
+                            subscriptionState.planName.contains(plan.name, ignoreCase = true)
+                    PlanSummaryRow(
+                        plan = plan,
+                        isCurrent = isCurrentPlan
+                    )
+                }
+            }
+
             // Feature limits
             Spacer(modifier = Modifier.height(12.dp))
             HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
@@ -831,6 +862,104 @@ private fun SubscriptionDetailRow(
             fontWeight = FontWeight.Medium,
             color = MaterialTheme.colorScheme.onSurface
         )
+    }
+}
+
+@Composable
+private fun PlanSummaryRow(
+    plan: PlanDetails,
+    isCurrent: Boolean
+) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        shape = RoundedCornerShape(8.dp),
+        color = if (isCurrent)
+            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
+        else MaterialTheme.colorScheme.surface.copy(alpha = 0.5f),
+        tonalElevation = if (isCurrent) 2.dp else 0.dp
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                when (plan.billingPeriod) {
+                    BillingPeriod.MONTHLY -> Icons.Filled.CalendarMonth
+                    BillingPeriod.ANNUAL -> Icons.Filled.CalendarToday
+                    BillingPeriod.LIFETIME -> Icons.Filled.AllInclusive
+                },
+                contentDescription = null,
+                modifier = Modifier.size(20.dp),
+                tint = if (isCurrent) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(modifier = Modifier.width(10.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        plan.name,
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    if (isCurrent) {
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Surface(
+                            shape = MaterialTheme.shapes.extraSmall,
+                            color = MaterialTheme.colorScheme.primary
+                        ) {
+                            Text(
+                                "CURRENT",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onPrimary,
+                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                            )
+                        }
+                    }
+                    if (plan.hasFreeTrial && !isCurrent) {
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Surface(
+                            shape = MaterialTheme.shapes.extraSmall,
+                            color = MaterialTheme.colorScheme.tertiary
+                        ) {
+                            Text(
+                                "${plan.freeTrialDays}-DAY TRIAL",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onTertiary,
+                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                            )
+                        }
+                    }
+                    if (plan.billingPeriod == BillingPeriod.ANNUAL && !isCurrent) {
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Surface(
+                            shape = MaterialTheme.shapes.extraSmall,
+                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
+                        ) {
+                            Text(
+                                "BEST VALUE",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                            )
+                        }
+                    }
+                }
+                Text(
+                    plan.description,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Text(
+                "${plan.formattedPrice}/${plan.billingPeriod.label}",
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.primary
+            )
+        }
     }
 }
 
