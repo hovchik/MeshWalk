@@ -31,6 +31,9 @@ class RoutingTable @Inject constructor(
     private val routes = ConcurrentHashMap<String, RoutingEntry>()
     private val _routeUpdates = MutableStateFlow(0L) // trigger for observers
 
+    /** Observable stream of route-change timestamps for real-time UI updates. */
+    val routeUpdates: Flow<Long> get() = _routeUpdates
+
     fun getRoute(destinationNodeId: String): RoutingEntry? {
         val entry = routes[destinationNodeId]
         if (entry != null && entry.isStale) {
