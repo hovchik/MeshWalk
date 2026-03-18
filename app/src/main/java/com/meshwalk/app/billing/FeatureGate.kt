@@ -43,6 +43,18 @@ class FeatureGate @Inject constructor(
     val canCreateMultipleIdentities: Boolean
         get() = billingManager.isFeatureEnabled(PremiumFeature.CUSTOM_IDENTITY_NAMES)
 
+    /** Whether user can export chat history. */
+    val canExportChat: Boolean
+        get() = billingManager.isFeatureEnabled(PremiumFeature.CHAT_EXPORT)
+
+    /** Whether custom color themes are available. */
+    val canUseCustomThemes: Boolean
+        get() = billingManager.isFeatureEnabled(PremiumFeature.CUSTOM_THEMES)
+
+    /** Whether the user is on any premium plan. */
+    val isPremium: Boolean
+        get() = billingManager.subscriptionState.value.isActive
+
     /** Current subscription state for UI display. */
     val subscriptionState get() = billingManager.subscriptionState
 }

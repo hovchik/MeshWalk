@@ -20,6 +20,9 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.meshwalk.app.billing.BillingManager
+import com.meshwalk.app.billing.FeatureGate
+import com.meshwalk.app.billing.SubscriptionState
 import com.meshwalk.app.domain.model.*
 import com.meshwalk.app.domain.repository.GroupRepository
 import com.meshwalk.app.domain.repository.IdentityRepository
@@ -35,13 +38,15 @@ class SettingsViewModel @Inject constructor(
     private val settingsRepo: SettingsRepository,
     private val identityRepo: IdentityRepository,
     private val groupRepo: GroupRepository,
-    private val transportManager: TransportManagerPort
+    private val transportManager: TransportManagerPort,
+    val featureGate: FeatureGate
 ) : ViewModel() {
 
     data class UiState(
         val settings: AppSettings = AppSettings(),
         val identity: NodeIdentity? = null,
-        val isScanning: Boolean = false
+        val isScanning: Boolean = false,
+        val subscriptionState: SubscriptionState = SubscriptionState()
     )
 
     private val _state = MutableStateFlow(UiState())
@@ -52,9 +57,15 @@ class SettingsViewModel @Inject constructor(
             combine(
                 settingsRepo.observeSettings(),
                 identityRepo.observeActiveIdentity(),
-                transportManager.isScanning
-            ) { settings, identity, scanning ->
-                UiState(settings = settings, identity = identity, isScanning = scanning)
+                transportManager.isScanning,
+                featureGate.subscriptionState
+            ) { settings, identity, scanning, subscription ->
+                UiState(
+                    settings = settings,
+                    identity = identity,
+                    isScanning = scanning,
+                    subscriptionState = subscription
+                )
             }.collect { _state.value = it }
         }
     }
@@ -93,6 +104,7 @@ class SettingsViewModel @Inject constructor(
 @Composable
 fun SettingsScreen(
     onDiagnostics: () -> Unit,
+    onSubscription: () -> Unit = {},
     viewModel: SettingsViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsState()
@@ -101,6 +113,14 @@ fun SettingsScreen(
     Column(
         modifier = Modifier.verticalScroll(rememberScrollState())
     ) {
+        // Subscription section
+        SectionHeader("Subscription")
+        SubscriptionStatusItem(
+            subscriptionState = state.subscriptionState,
+            onClick = onSubscription
+        )
+        HorizontalDivider()
+
         // Profile section
         SectionHeader("Profile")
         state.identity?.let { identity ->
@@ -314,12 +334,43 @@ fun SettingsScreen(
 
         // Debug
         SectionHeader("Debug")
+        val canAccessDiagnostics = viewModel.featureGate.canAccessDiagnostics
         ListItem(
-            modifier = Modifier.clickable(onClick = onDiagnostics),
-            headlineContent = { Text("Mesh Diagnostics") },
-            supportingContent = { Text("View routing tables, queues, and transport state") },
+            modifier = Modifier.clickable(onClick = {
+                if (canAccessDiagnostics) onDiagnostics() else onSubscription()
+            }),
+            headlineContent = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Mesh Diagnostics")
+                    if (!canAccessDiagnostics) {
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Surface(
+                            shape = MaterialTheme.shapes.extraSmall,
+                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
+                        ) {
+                            Text(
+                                "PRO",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+                }
+            },
+            supportingContent = {
+                Text(
+                    if (canAccessDiagnostics) "View routing tables, queues, and transport state"
+                    else "Upgrade to Pro for full diagnostics access"
+                )
+            },
             leadingContent = { Icon(Icons.Filled.BugReport, null) },
-            trailingContent = { Icon(Icons.Filled.ChevronRight, null) }
+            trailingContent = {
+                Icon(
+                    if (canAccessDiagnostics) Icons.Filled.ChevronRight else Icons.Filled.Lock,
+                    null
+                )
+            }
         )
 
         Spacer(modifier = Modifier.height(32.dp))
@@ -556,6 +607,55 @@ private fun IdentityTypeOption(
         trailingContent = {
             RadioButton(selected = selected, onClick = onClick)
         }
+    )
+}
+
+@Composable
+private fun SubscriptionStatusItem(
+    subscriptionState: SubscriptionState,
+    onClick: () -> Unit
+) {
+    ListItem(
+        modifier = Modifier.clickable(onClick = onClick),
+        headlineContent = {
+            if (subscriptionState.isActive) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("MeshWalk Pro")
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Surface(
+                        shape = MaterialTheme.shapes.extraSmall,
+                        color = MaterialTheme.colorScheme.primary
+                    ) {
+                        Text(
+                            "ACTIVE",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onPrimary,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                        )
+                    }
+                }
+            } else {
+                Text("Upgrade to Pro")
+            }
+        },
+        supportingContent = {
+            Text(
+                if (subscriptionState.isActive) {
+                    "Plan: ${subscriptionState.planName}"
+                } else {
+                    "Unlock larger groups, extended history & more"
+                }
+            )
+        },
+        leadingContent = {
+            Icon(
+                Icons.Filled.WorkspacePremium,
+                contentDescription = null,
+                tint = if (subscriptionState.isActive) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.outline
+            )
+        },
+        trailingContent = { Icon(Icons.Filled.ChevronRight, null) }
     )
 }
 

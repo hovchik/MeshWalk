@@ -2,6 +2,7 @@ package com.meshwalk.app.di
 
 import android.content.Context
 import androidx.room.Room
+import com.meshwalk.app.billing.BillingManager
 import com.meshwalk.app.data.local.MeshWalkDatabase
 import com.meshwalk.app.data.local.dao.*
 import com.meshwalk.app.data.repository.*
@@ -71,6 +72,17 @@ abstract class RepositoryModule {
 
     @Binds @Singleton
     abstract fun bindSettingsRepository(impl: SettingsRepositoryImpl): SettingsRepository
+}
+
+@Module
+@InstallIn(SingletonComponent::class)
+object BillingModule {
+
+    @Provides
+    @Singleton
+    fun provideBillingManager(@ApplicationContext context: Context): BillingManager {
+        return BillingManager(context)
+    }
 }
 
 @Module

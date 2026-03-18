@@ -1,9 +1,13 @@
 package com.meshwalk.app.billing
 
-import kotlinx.coroutines.flow.Flow
+import android.app.Activity
+import android.content.Context
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.launchIn
+import kotlinx.coroutines.flow.onEach
 import timber.log.Timber
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -16,7 +20,8 @@ import javax.inject.Singleton
  *
  * Premium tier:
  * - Unlimited group size (up to 50), 1000-message queue,
- *   priority relay routing, extended message history, diagnostic tools
+ *   priority relay routing, extended message history, diagnostic tools,
+ *   chat export, custom themes
  */
 enum class PremiumFeature {
     EXTENDED_GROUP_SIZE,         // Groups > 5 members
@@ -24,7 +29,9 @@ enum class PremiumFeature {
     EXTENDED_STORE_FORWARD,     // Larger offline queue (1000 vs 100)
     DIAGNOSTIC_TOOLS,           // Full diagnostics screen access
     EXTENDED_MESSAGE_HISTORY,   // Message retention > 7 days
-    CUSTOM_IDENTITY_NAMES       // Multiple named identities
+    CUSTOM_IDENTITY_NAMES,      // Multiple named identities
+    CHAT_EXPORT,                // Export chat history (JSON/CSV)
+    CUSTOM_THEMES               // Custom color themes
 }
 
 /**
@@ -67,32 +74,60 @@ sealed interface PurchaseResult {
 /**
  * Concrete billing manager that wraps the billing provider.
  *
- * Falls back to [FreeTierBillingProvider] when Google Play Billing
- * is unavailable (no Play Store, sideloaded, emulator, etc.).
+ * Attempts to initialize [GooglePlayBillingProvider] first, then falls back
+ * to [FreeTierBillingProvider] when Google Play Billing is unavailable
+ * (no Play Store, sideloaded, emulator, etc.).
  *
  * UI layer observes [subscriptionState] and calls [isFeatureEnabled]
  * to gate premium features — never checks billing directly.
  */
 @Singleton
-class BillingManager @Inject constructor() : BillingProvider {
+class BillingManager @Inject constructor(
+    private val context: Context
+) : BillingProvider {
 
-    // In production, this would be initialized with Google Play BillingClient.
-    // For now, uses the free-tier fallback so the app compiles and runs
-    // without play-services-billing dependency.
-    private val provider: BillingProvider = FreeTierBillingProvider()
+    private var provider: BillingProvider = FreeTierBillingProvider()
+    private var googlePlayProvider: GooglePlayBillingProvider? = null
 
     private val _subscriptionState = MutableStateFlow(SubscriptionState())
     override val subscriptionState: StateFlow<SubscriptionState> = _subscriptionState.asStateFlow()
 
+    private val _availablePlans = MutableStateFlow<List<PlanDetails>>(emptyList())
+    val availablePlans: StateFlow<List<PlanDetails>> = _availablePlans.asStateFlow()
+
     override suspend fun initialize() {
         try {
-            provider.initialize()
+            val gpProvider = GooglePlayBillingProvider(context)
+            gpProvider.initialize()
+            provider = gpProvider
+            googlePlayProvider = gpProvider
+
             // Mirror provider state
-            _subscriptionState.value = provider.subscriptionState.value
+            _subscriptionState.value = gpProvider.subscriptionState.value
+            _availablePlans.value = gpProvider.availablePlans.value
+
+            Timber.d("Google Play Billing initialized successfully")
         } catch (e: Exception) {
-            Timber.w(e, "Billing initialization failed, falling back to free tier")
+            Timber.w(e, "Google Play Billing unavailable, falling back to free tier")
+            provider = FreeTierBillingProvider()
+            googlePlayProvider = null
             _subscriptionState.value = SubscriptionState()
+            _availablePlans.value = defaultPlans()
         }
+    }
+
+    /**
+     * Observe provider state changes and mirror them.
+     * Call after [initialize] from a coroutine scope.
+     */
+    fun observeStateChanges(scope: CoroutineScope) {
+        provider.subscriptionState.onEach { state ->
+            _subscriptionState.value = state
+        }.launchIn(scope)
+
+        googlePlayProvider?.availablePlans?.onEach { plans ->
+            _availablePlans.value = plans
+        }?.launchIn(scope)
     }
 
     override suspend fun launchPurchaseFlow(): PurchaseResult {
@@ -104,9 +139,25 @@ class BillingManager @Inject constructor() : BillingProvider {
         }
     }
 
+    /**
+     * Launch a purchase flow for a specific plan from an Activity.
+     */
+    suspend fun launchPurchaseFlow(activity: Activity, planDetails: PlanDetails): PurchaseResult {
+        val gpProvider = googlePlayProvider
+            ?: return PurchaseResult.BillingUnavailable
+        return try {
+            gpProvider.launchPurchaseFlow(activity, planDetails)
+        } catch (e: Exception) {
+            Timber.e(e, "Purchase flow failed for ${planDetails.productId}")
+            PurchaseResult.Error(e.message ?: "Purchase failed")
+        }
+    }
+
     override suspend fun restorePurchases(): Boolean {
         return try {
-            provider.restorePurchases()
+            val restored = provider.restorePurchases()
+            _subscriptionState.value = provider.subscriptionState.value
+            restored
         } catch (e: Exception) {
             Timber.w(e, "Restore purchases failed")
             false
@@ -119,7 +170,40 @@ class BillingManager @Inject constructor() : BillingProvider {
 
     override fun destroy() {
         provider.destroy()
+        googlePlayProvider = null
     }
+
+    /** Whether the Google Play Billing provider is active (vs. free-tier fallback). */
+    val isPlayBillingAvailable: Boolean
+        get() = googlePlayProvider != null
+
+    /**
+     * Default plan details shown when Google Play is unavailable.
+     * Prices are placeholders — real prices come from the Play Console.
+     */
+    private fun defaultPlans(): List<PlanDetails> = listOf(
+        PlanDetails(
+            productId = SubscriptionPlans.PRO_MONTHLY_ID,
+            name = "MeshWalk Pro Monthly",
+            description = "All premium features, billed monthly",
+            formattedPrice = "$3.99",
+            billingPeriod = BillingPeriod.MONTHLY
+        ),
+        PlanDetails(
+            productId = SubscriptionPlans.PRO_ANNUAL_ID,
+            name = "MeshWalk Pro Annual",
+            description = "All premium features, save 37%",
+            formattedPrice = "$29.99",
+            billingPeriod = BillingPeriod.ANNUAL
+        ),
+        PlanDetails(
+            productId = SubscriptionPlans.PRO_LIFETIME_ID,
+            name = "MeshWalk Pro Lifetime",
+            description = "One-time purchase, yours forever",
+            formattedPrice = "$79.99",
+            billingPeriod = BillingPeriod.LIFETIME
+        )
+    )
 }
 
 /**

@@ -23,6 +23,7 @@ import com.meshwalk.app.ui.network.NetworkGraphScreen
 import com.meshwalk.app.ui.onboarding.OnboardingScreen
 import com.meshwalk.app.ui.peers.PeersScreen
 import com.meshwalk.app.ui.settings.SettingsScreen
+import com.meshwalk.app.ui.subscription.SubscriptionScreen
 import com.meshwalk.app.ui.components.TopMenuBar
 
 // -- Navigation Routes --
@@ -36,6 +37,7 @@ object Routes {
     const val NETWORK = "network"
     const val SETTINGS = "settings"
     const val DIAGNOSTICS = "diagnostics"
+    const val SUBSCRIPTION = "subscription"
 
     fun chatDetail(conversationId: String, peerNodeId: String) =
         "chat/$conversationId/$peerNodeId"
@@ -190,12 +192,19 @@ fun MeshWalkApp(mainViewModel: MainViewModel = hiltViewModel()) {
                 SettingsScreen(
                     onDiagnostics = {
                         navController.navigate(Routes.DIAGNOSTICS)
+                    },
+                    onSubscription = {
+                        navController.navigate(Routes.SUBSCRIPTION)
                     }
                 )
             }
 
             composable(Routes.DIAGNOSTICS) {
                 DiagnosticsScreen(onBack = { navController.popBackStack() })
+            }
+
+            composable(Routes.SUBSCRIPTION) {
+                SubscriptionScreen(onBack = { navController.popBackStack() })
             }
         }
     }
