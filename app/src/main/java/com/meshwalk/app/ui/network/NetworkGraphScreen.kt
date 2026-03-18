@@ -24,6 +24,7 @@ import com.meshwalk.app.domain.model.*
 import com.meshwalk.app.domain.repository.IdentityRepository
 import com.meshwalk.app.domain.repository.PeerRepository
 import com.meshwalk.app.domain.repository.SettingsRepository
+import com.meshwalk.app.domain.usecase.TransportManagerPort
 import com.meshwalk.app.routing.table.RoutingTable
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.delay
@@ -37,7 +38,8 @@ class NetworkGraphViewModel @Inject constructor(
     private val peerRepo: PeerRepository,
     private val routingTable: RoutingTable,
     private val identityRepo: IdentityRepository,
-    private val settingsRepo: SettingsRepository
+    private val settingsRepo: SettingsRepository,
+    private val transportManager: TransportManagerPort
 ) : ViewModel() {
 
     data class UiState(
@@ -62,16 +64,25 @@ class NetworkGraphViewModel @Inject constructor(
             val identity = identityRepo.getActiveIdentity()
             val selfId = identity?.nodeId ?: ""
 
-            // Periodic ticker driven by the user-configurable refresh interval
-            val ticker = settingsRepo.observeSettings()
-                .map { it.networkGraphRefreshSeconds }
-                .distinctUntilChanged()
-                .flatMapLatest { seconds ->
-                    flow {
-                        while (true) {
-                            emit(Unit)
-                            delay(seconds * 1_000L)
+            // Periodic ticker driven by the user-configurable refresh interval.
+            // Pauses when scanning is stopped so we don't poll unnecessarily.
+            val ticker = combine(
+                settingsRepo.observeSettings()
+                    .map { it.networkGraphRefreshSeconds }
+                    .distinctUntilChanged(),
+                transportManager.isScanning
+            ) { seconds, scanning -> seconds to scanning }
+                .flatMapLatest { (seconds, scanning) ->
+                    if (scanning) {
+                        flow {
+                            while (true) {
+                                emit(Unit)
+                                delay(seconds * 1_000L)
+                            }
                         }
+                    } else {
+                        // Emit once so the graph shows current state, then stop polling
+                        flowOf(Unit)
                     }
                 }
 
