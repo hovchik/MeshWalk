@@ -2,6 +2,7 @@ package com.meshwalk.app.domain.usecase
 
 import com.meshwalk.app.domain.model.*
 import com.meshwalk.app.domain.repository.*
+import kotlinx.coroutines.flow.StateFlow
 import timber.log.Timber
 import javax.inject.Inject
 
@@ -163,6 +164,7 @@ interface MeshOutboxPort {
 }
 
 interface TransportManagerPort {
+    val isScanning: StateFlow<Boolean>
     suspend fun startDiscovery()
     suspend fun stopDiscovery()
     suspend fun startAdvertising()

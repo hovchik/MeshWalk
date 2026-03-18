@@ -24,6 +24,7 @@ import com.meshwalk.app.domain.model.*
 import com.meshwalk.app.domain.repository.IdentityRepository
 import com.meshwalk.app.domain.repository.PeerRepository
 import com.meshwalk.app.domain.repository.SettingsRepository
+import com.meshwalk.app.domain.usecase.TransportManagerPort
 import com.meshwalk.app.routing.table.RoutingTable
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.delay
@@ -37,7 +38,8 @@ class NetworkGraphViewModel @Inject constructor(
     private val peerRepo: PeerRepository,
     private val routingTable: RoutingTable,
     private val identityRepo: IdentityRepository,
-    private val settingsRepo: SettingsRepository
+    private val settingsRepo: SettingsRepository,
+    private val transportManager: TransportManagerPort
 ) : ViewModel() {
 
     data class UiState(
@@ -47,6 +49,7 @@ class NetworkGraphViewModel @Inject constructor(
         val activePeerCount: Int = 0,
         val routeCount: Int = 0,
         val showOnlyActive: Boolean = true,
+        val isScanning: Boolean = false,
         val lastUpdated: Long = 0L
     )
 
@@ -54,6 +57,13 @@ class NetworkGraphViewModel @Inject constructor(
     val state = _state.asStateFlow()
 
     init {
+        // Observe scanning state from transport layer
+        viewModelScope.launch {
+            transportManager.isScanning.collect { scanning ->
+                _state.update { it.copy(isScanning = scanning) }
+            }
+        }
+
         viewModelScope.launch {
             // Reset stale connection states left over from a previous session
             // (e.g. app was killed before disconnect callbacks could fire).
@@ -121,6 +131,20 @@ class NetworkGraphViewModel @Inject constructor(
             rebuildGraph(selfId, peers)
         }
     }
+
+    fun startScanning() {
+        viewModelScope.launch {
+            transportManager.startDiscovery()
+            transportManager.startAdvertising()
+        }
+    }
+
+    fun stopScanning() {
+        viewModelScope.launch {
+            transportManager.stopDiscovery()
+            transportManager.stopAdvertising()
+        }
+    }
 }
 
 @Composable
@@ -161,14 +185,39 @@ fun NetworkGraphScreen(viewModel: NetworkGraphViewModel = hiltViewModel()) {
                     )
                 }
             }
-            FilterChip(
-                selected = state.showOnlyActive,
-                onClick = { viewModel.toggleActiveFilter() },
-                label = { Text("Active only") },
-                leadingIcon = if (state.showOnlyActive) {
-                    { Icon(Icons.Filled.Visibility, contentDescription = null, modifier = Modifier.size(16.dp)) }
-                } else null
-            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(
+                    selected = state.showOnlyActive,
+                    onClick = { viewModel.toggleActiveFilter() },
+                    label = { Text("Active only") },
+                    leadingIcon = if (state.showOnlyActive) {
+                        { Icon(Icons.Filled.Visibility, contentDescription = null, modifier = Modifier.size(16.dp)) }
+                    } else null
+                )
+                if (state.isScanning) {
+                    FilledTonalButton(
+                        onClick = { viewModel.stopScanning() },
+                        contentPadding = PaddingValues(horizontal = 12.dp)
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(14.dp),
+                            strokeWidth = 2.dp,
+                            color = MaterialTheme.colorScheme.onSecondaryContainer
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Stop")
+                    }
+                } else {
+                    OutlinedButton(
+                        onClick = { viewModel.startScanning() },
+                        contentPadding = PaddingValues(horizontal = 12.dp)
+                    ) {
+                        Icon(Icons.Filled.Radar, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Scan")
+                    }
+                }
+            }
         }
 
         // Legend
