@@ -641,7 +641,7 @@ private fun SubscriptionInfoCard(
         shape = RoundedCornerShape(16.dp)
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
-            // Header: plan name + status badge
+            // Header: plan icon + name + status badge
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.fillMaxWidth()
@@ -672,8 +672,8 @@ private fun SubscriptionInfoCard(
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.SemiBold
                         )
-                        Spacer(modifier = Modifier.width(8.dp))
                         if (subscriptionState.isActive) {
+                            Spacer(modifier = Modifier.width(8.dp))
                             Surface(
                                 shape = MaterialTheme.shapes.extraSmall,
                                 color = if (subscriptionState.isFreeTrial)
@@ -691,17 +691,18 @@ private fun SubscriptionInfoCard(
                             }
                         }
                     }
-                    if (subscriptionState.isActive) {
-                        Text(
-                            subscriptionState.planName,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
+                    Text(
+                        when {
+                            subscriptionState.isActive -> subscriptionState.planName
+                            else -> "Groups up to ${featureGate.maxGroupSize}, ${featureGate.maxQueueSize}-msg queue"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
             }
 
-            // Renewal / expiration info
+            // Renewal / expiration info for active subscriptions
             if (subscriptionState.isActive && subscriptionState.expiresAt != null) {
                 Spacer(modifier = Modifier.height(12.dp))
                 HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
@@ -735,76 +736,66 @@ private fun SubscriptionInfoCard(
                 )
             }
 
-            // Available packages
-            if (availablePlans.isNotEmpty()) {
+            // Compact plan summary for free users
+            if (!subscriptionState.isActive && availablePlans.isNotEmpty()) {
                 Spacer(modifier = Modifier.height(12.dp))
                 HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
                 Spacer(modifier = Modifier.height(12.dp))
 
                 Text(
-                    if (subscriptionState.isActive) "All plans" else "Available packages",
+                    "Available plans",
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Spacer(modifier = Modifier.height(8.dp))
 
                 availablePlans.forEach { plan ->
-                    val isCurrentPlan = subscriptionState.isActive &&
-                            subscriptionState.planName.contains(plan.name, ignoreCase = true)
-                    PlanSummaryRow(
-                        plan = plan,
-                        isCurrent = isCurrentPlan
-                    )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 3.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            when (plan.billingPeriod) {
+                                BillingPeriod.MONTHLY -> Icons.Filled.CalendarMonth
+                                BillingPeriod.ANNUAL -> Icons.Filled.CalendarToday
+                                BillingPeriod.LIFETIME -> Icons.Filled.AllInclusive
+                            },
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            plan.billingPeriod.label.replaceFirstChar { it.uppercase() },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.weight(1f)
+                        )
+                        if (plan.billingPeriod == BillingPeriod.ANNUAL) {
+                            Surface(
+                                shape = MaterialTheme.shapes.extraSmall,
+                                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
+                            ) {
+                                Text(
+                                    "SAVE 37%",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                        }
+                        Text(
+                            "${plan.formattedPrice}/${plan.billingPeriod.label}",
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
                 }
             }
-
-            // Feature limits
-            Spacer(modifier = Modifier.height(12.dp))
-            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
-            Spacer(modifier = Modifier.height(12.dp))
-
-            Text(
-                "Your limits",
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-
-            SubscriptionDetailRow(
-                icon = Icons.Filled.Group,
-                label = "Max group size",
-                value = "${featureGate.maxGroupSize} members"
-            )
-            SubscriptionDetailRow(
-                icon = Icons.Filled.Inbox,
-                label = "Message queue",
-                value = "${featureGate.maxQueueSize} messages"
-            )
-            SubscriptionDetailRow(
-                icon = Icons.Filled.History,
-                label = "Message retention",
-                value = "${featureGate.messageRetentionDays} days"
-            )
-            SubscriptionDetailRow(
-                icon = Icons.Filled.Speed,
-                label = "Priority relay",
-                value = if (featureGate.hasPriorityRelay) "Enabled" else "Standard"
-            )
-            SubscriptionDetailRow(
-                icon = Icons.Filled.Badge,
-                label = "Multiple identities",
-                value = if (featureGate.canCreateMultipleIdentities) "Enabled" else "Disabled"
-            )
-            SubscriptionDetailRow(
-                icon = Icons.Filled.BugReport,
-                label = "Diagnostics",
-                value = if (featureGate.canAccessDiagnostics) "Full access" else "Basic"
-            )
-            SubscriptionDetailRow(
-                icon = Icons.Filled.FileDownload,
-                label = "Chat export",
-                value = if (featureGate.canExportChat) "Available" else "Locked"
-            )
 
             // Action button
             Spacer(modifier = Modifier.height(16.dp))
@@ -824,7 +815,7 @@ private fun SubscriptionInfoCard(
                 ) {
                     Icon(Icons.Filled.WorkspacePremium, null, modifier = Modifier.size(18.dp))
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text("Start 7-Day Free Trial")
+                    Text("Upgrade to Pro")
                 }
             }
         }
@@ -862,104 +853,6 @@ private fun SubscriptionDetailRow(
             fontWeight = FontWeight.Medium,
             color = MaterialTheme.colorScheme.onSurface
         )
-    }
-}
-
-@Composable
-private fun PlanSummaryRow(
-    plan: PlanDetails,
-    isCurrent: Boolean
-) {
-    Surface(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 4.dp),
-        shape = RoundedCornerShape(8.dp),
-        color = if (isCurrent)
-            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
-        else MaterialTheme.colorScheme.surface.copy(alpha = 0.5f),
-        tonalElevation = if (isCurrent) 2.dp else 0.dp
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(
-                when (plan.billingPeriod) {
-                    BillingPeriod.MONTHLY -> Icons.Filled.CalendarMonth
-                    BillingPeriod.ANNUAL -> Icons.Filled.CalendarToday
-                    BillingPeriod.LIFETIME -> Icons.Filled.AllInclusive
-                },
-                contentDescription = null,
-                modifier = Modifier.size(20.dp),
-                tint = if (isCurrent) MaterialTheme.colorScheme.primary
-                else MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Spacer(modifier = Modifier.width(10.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        plan.name,
-                        style = MaterialTheme.typography.bodySmall,
-                        fontWeight = FontWeight.Medium,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    if (isCurrent) {
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Surface(
-                            shape = MaterialTheme.shapes.extraSmall,
-                            color = MaterialTheme.colorScheme.primary
-                        ) {
-                            Text(
-                                "CURRENT",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onPrimary,
-                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
-                            )
-                        }
-                    }
-                    if (plan.hasFreeTrial && !isCurrent) {
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Surface(
-                            shape = MaterialTheme.shapes.extraSmall,
-                            color = MaterialTheme.colorScheme.tertiary
-                        ) {
-                            Text(
-                                "${plan.freeTrialDays}-DAY TRIAL",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onTertiary,
-                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
-                            )
-                        }
-                    }
-                    if (plan.billingPeriod == BillingPeriod.ANNUAL && !isCurrent) {
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Surface(
-                            shape = MaterialTheme.shapes.extraSmall,
-                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
-                        ) {
-                            Text(
-                                "BEST VALUE",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
-                            )
-                        }
-                    }
-                }
-                Text(
-                    plan.description,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            Text(
-                "${plan.formattedPrice}/${plan.billingPeriod.label}",
-                style = MaterialTheme.typography.bodySmall,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.primary
-            )
-        }
     }
 }
 
