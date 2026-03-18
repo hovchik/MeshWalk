@@ -351,7 +351,10 @@ class TransportManager @Inject constructor(
             }
 
             is TransportEvent.Disconnected -> {
-                val nodeId = nearbyTransport.getNodeIdForEndpoint(event.endpointId)
+                // nodeId is embedded by the transport layer before it erases its own map,
+                // so this lookup is always reliable even after endpointNodeMap is cleaned.
+                val nodeId = event.nodeId
+                    ?: nearbyTransport.getNodeIdForEndpoint(event.endpointId)
                 nodeId?.let {
                     nodeEndpointMap.remove(it)
                     peerRepository.getPeer(it)?.let { peer ->

@@ -186,9 +186,13 @@ class NearbyConnectionsTransport @Inject constructor(
 
         override fun onDisconnected(endpointId: String) {
             Timber.d("Disconnected: $endpointId")
+            // Remove from the endpoint→node map now and embed the nodeId in the event
+            // so that downstream consumers (TransportManager, RoutingEngine) can use it
+            // without a post-hoc lookup that would already return null.
+            val nodeId = endpointNodeMap.remove(endpointId)
             connectedEndpoints.remove(endpointId)
             pendingEndpoints.remove(endpointId)
-            _events.tryEmit(TransportEvent.Disconnected(endpointId))
+            _events.tryEmit(TransportEvent.Disconnected(endpointId, nodeId))
         }
     }
 

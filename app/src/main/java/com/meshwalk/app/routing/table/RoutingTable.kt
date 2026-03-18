@@ -23,6 +23,11 @@ import javax.inject.Singleton
 class RoutingTable @Inject constructor(
     private val routingRepository: RoutingRepository
 ) {
+    companion object {
+        /** Hard cap on in-memory routing entries to prevent unbounded growth in large meshes. */
+        private const val MAX_ROUTES = 500
+    }
+
     private val routes = ConcurrentHashMap<String, RoutingEntry>()
     private val _routeUpdates = MutableStateFlow(0L) // trigger for observers
 
@@ -45,10 +50,34 @@ class RoutingTable @Inject constructor(
                 (entry.hopCount == existing.hopCount && entry.reliability > existing.reliability)
 
         if (shouldUpdate) {
+            // Enforce the cap before inserting a brand-new destination.
+            if (existing == null && routes.size >= MAX_ROUTES) {
+                evictWorstRoute()
+            }
             routes[entry.destinationNodeId] = entry
             routingRepository.updateRoute(entry)
             _routeUpdates.value = System.currentTimeMillis()
             Timber.d("Route updated: ${entry.destinationNodeId} via ${entry.nextHopNodeId} (${entry.hopCount} hops)")
+        }
+    }
+
+    /**
+     * Evict the least-useful route to make room for a new one.
+     * Priority: stale > most hops > lowest reliability.
+     */
+    private fun evictWorstRoute() {
+        // 1. Prefer removing an already-stale entry
+        val staleKey = routes.entries.firstOrNull { it.value.isStale }?.key
+        if (staleKey != null) {
+            routes.remove(staleKey)
+            Timber.d("RoutingTable: evicted stale route for $staleKey (at capacity)")
+            return
+        }
+        // 2. Remove the entry with the highest hop count (furthest, least reliable relay)
+        val worstKey = routes.entries.maxByOrNull { it.value.hopCount }?.key
+        if (worstKey != null) {
+            routes.remove(worstKey)
+            Timber.d("RoutingTable: evicted highest-hop route for $worstKey (at capacity)")
         }
     }
 
