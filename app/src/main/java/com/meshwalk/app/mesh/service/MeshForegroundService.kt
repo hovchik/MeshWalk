@@ -17,6 +17,7 @@ import com.meshwalk.app.MainActivity
 import com.meshwalk.app.R
 import com.meshwalk.app.domain.repository.IdentityRepository
 import com.meshwalk.app.mesh.inbox.MeshInbox
+import com.meshwalk.app.mesh.outbox.MeshOutbox
 import com.meshwalk.app.mesh.outbox.MessageResendManager
 import com.meshwalk.app.routing.engine.MeshRoutingEngine
 import com.meshwalk.app.transport.api.NodeAdvertisement
@@ -39,6 +40,7 @@ class MeshForegroundService : Service() {
     @Inject lateinit var routingEngine: MeshRoutingEngine
     @Inject lateinit var identityRepository: IdentityRepository
     @Inject lateinit var meshInbox: MeshInbox
+    @Inject lateinit var meshOutbox: MeshOutbox
     @Inject lateinit var messageResendManager: MessageResendManager
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -131,6 +133,9 @@ class MeshForegroundService : Service() {
                     routingEngine.stop()
                 }
             }
+            // Cancel the outbox retry scope so in-flight retry coroutines don't
+            // outlive the service.
+            meshOutbox.cancel()
             meshStarted = false
             Timber.d("Mesh stopped")
         }

@@ -7,6 +7,7 @@ import androidx.datastore.preferences.preferencesDataStore
 import com.meshwalk.app.crypto.keys.MeshKeyManager
 import com.meshwalk.app.crypto.keys.KeyStorage
 import com.meshwalk.app.data.local.dao.*
+import com.meshwalk.app.data.local.entity.BlockedPeerEntity
 import com.meshwalk.app.data.mapper.EntityMapper.toDomain
 import com.meshwalk.app.data.mapper.EntityMapper.toEntity
 import com.meshwalk.app.domain.model.*
@@ -214,10 +215,14 @@ class ConversationRepositoryImpl @Inject constructor(
 // ============================================================
 @Singleton
 class PeerRepositoryImpl @Inject constructor(
-    private val peerDao: PeerDao
+    private val peerDao: PeerDao,
+    private val blockedPeerDao: BlockedPeerDao
 ) : PeerRepository {
 
     override suspend fun upsertPeer(peer: PeerNode) {
+        // Silently ignore updates for blocked peers so they don't reappear
+        // in the UI after being blocked (discovery still runs in the background).
+        if (blockedPeerDao.isBlocked(peer.nodeId)) return
         peerDao.upsert(peer.toEntity())
     }
 
@@ -226,7 +231,13 @@ class PeerRepositoryImpl @Inject constructor(
     }
 
     override fun observeNearbyPeers(): Flow<List<PeerNode>> {
-        return peerDao.observeAll().map { entities -> entities.map { it.toDomain() } }
+        return combine(
+            peerDao.observeAll(),
+            blockedPeerDao.observeAll()
+        ) { peers, blocked ->
+            val blockedIds = blocked.map { it.nodeId }.toSet()
+            peers.filter { it.nodeId !in blockedIds }.map { it.toDomain() }
+        }
     }
 
     override suspend fun getPeer(nodeId: String): PeerNode? {
@@ -239,6 +250,32 @@ class PeerRepositoryImpl @Inject constructor(
 
     override suspend fun pruneStale(maxAgeMs: Long) {
         peerDao.pruneStale(System.currentTimeMillis() - maxAgeMs)
+    }
+
+    override suspend fun isBlocked(nodeId: String): Boolean {
+        return blockedPeerDao.isBlocked(nodeId)
+    }
+
+    override suspend fun blockPeer(nodeId: String, displayName: String?) {
+        blockedPeerDao.insert(
+            BlockedPeerEntity(
+                nodeId = nodeId,
+                displayName = displayName,
+                blockedAt = System.currentTimeMillis()
+            )
+        )
+        // Remove from the peers table so they vanish from the UI immediately.
+        peerDao.delete(nodeId)
+    }
+
+    override suspend fun unblockPeer(nodeId: String) {
+        blockedPeerDao.delete(nodeId)
+    }
+
+    override fun observeBlockedPeers(): Flow<List<BlockedPeer>> {
+        return blockedPeerDao.observeAll().map { entities ->
+            entities.map { BlockedPeer(it.nodeId, it.displayName, it.blockedAt) }
+        }
     }
 }
 

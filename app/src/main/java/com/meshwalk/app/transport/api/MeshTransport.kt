@@ -74,8 +74,11 @@ sealed interface TransportEvent {
     /** Connection established */
     data class Connected(val endpointId: String, val nodeId: String?) : TransportEvent
 
-    /** Connection lost */
-    data class Disconnected(val endpointId: String) : TransportEvent
+    /** Connection lost.
+     *  [nodeId] is populated by the transport layer at the moment of disconnect
+     *  (before the endpoint→node mapping is erased) so consumers do not need to
+     *  perform a post-hoc lookup that may already return null. */
+    data class Disconnected(val endpointId: String, val nodeId: String? = null) : TransportEvent
 
     /** Data received from a connected peer */
     data class DataReceived(

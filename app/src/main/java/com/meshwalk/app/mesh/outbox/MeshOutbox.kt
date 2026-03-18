@@ -43,6 +43,14 @@ class MeshOutbox @Inject constructor(
 
     private val retryScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
+    /**
+     * Cancel all in-flight retry jobs. Called when the mesh service stops so
+     * that pending retry coroutines don't keep the scope alive across restarts.
+     */
+    fun cancel() {
+        retryScope.cancel()
+    }
+
     override suspend fun enqueueMessage(message: MeshMessage, recipientNodeId: String) {
         trySendMessage(message, recipientNodeId, autoRetryAttempt = 0)
     }

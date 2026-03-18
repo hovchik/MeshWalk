@@ -230,6 +230,24 @@ class SessionManager @Inject constructor(
     }
 
     /**
+     * Evict in-memory session objects that have not been used for more than 24 hours.
+     * Sessions remain persisted to disk via [SessionStore] and are restored transparently
+     * on the next [getOrCreateSession] / [hasSession] call, so evicting them here
+     * only frees memory without affecting correctness.
+     *
+     * Called from the routing engine's periodic maintenance loop.
+     */
+    fun pruneStaleActiveSessions() {
+        val staleIds = activeSessions.entries
+            .filter { it.value.isStale }
+            .map { it.key }
+        staleIds.forEach { activeSessions.remove(it) }
+        if (staleIds.isNotEmpty()) {
+            Timber.d("SessionManager: evicted ${staleIds.size} stale in-memory sessions")
+        }
+    }
+
+    /**
      * Check if a session exists, loading from persistent storage if needed.
      * This ensures sessions survive app restarts without re-establishing
      * (which would reset chain counters and break decryption).

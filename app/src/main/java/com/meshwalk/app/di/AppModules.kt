@@ -32,7 +32,7 @@ object DatabaseModule {
             MeshWalkDatabase::class.java,
             MeshWalkDatabase.DATABASE_NAME
         )
-            .addMigrations(MeshWalkDatabase.MIGRATION_1_2, MeshWalkDatabase.MIGRATION_2_3, MeshWalkDatabase.MIGRATION_3_4, MeshWalkDatabase.MIGRATION_4_5)
+            .addMigrations(MeshWalkDatabase.MIGRATION_1_2, MeshWalkDatabase.MIGRATION_2_3, MeshWalkDatabase.MIGRATION_3_4, MeshWalkDatabase.MIGRATION_4_5, MeshWalkDatabase.MIGRATION_5_6)
             .fallbackToDestructiveMigration()
             .build()
     }
@@ -44,6 +44,7 @@ object DatabaseModule {
     @Provides fun provideRoutingDao(db: MeshWalkDatabase): RoutingDao = db.routingDao()
     @Provides fun provideGroupDao(db: MeshWalkDatabase): GroupDao = db.groupDao()
     @Provides fun provideSenderKeyDao(db: MeshWalkDatabase): SenderKeyDao = db.senderKeyDao()
+    @Provides fun provideBlockedPeerDao(db: MeshWalkDatabase): BlockedPeerDao = db.blockedPeerDao()
 }
 
 @Module

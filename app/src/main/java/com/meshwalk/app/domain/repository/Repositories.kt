@@ -46,7 +46,17 @@ interface PeerRepository {
     suspend fun getPeer(nodeId: String): PeerNode?
     suspend fun getDirectPeers(): List<PeerNode>
     suspend fun pruneStale(maxAgeMs: Long)
+    suspend fun isBlocked(nodeId: String): Boolean
+    suspend fun blockPeer(nodeId: String, displayName: String?)
+    suspend fun unblockPeer(nodeId: String)
+    fun observeBlockedPeers(): Flow<List<BlockedPeer>>
 }
+
+data class BlockedPeer(
+    val nodeId: String,
+    val displayName: String?,
+    val blockedAt: Long
+)
 
 interface GroupRepository {
     suspend fun createGroup(group: GroupInfo): GroupInfo

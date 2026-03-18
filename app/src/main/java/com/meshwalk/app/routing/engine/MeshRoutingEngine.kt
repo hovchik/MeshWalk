@@ -1,5 +1,6 @@
 package com.meshwalk.app.routing.engine
 
+import com.meshwalk.app.crypto.session.SessionManager
 import com.meshwalk.app.domain.model.*
 import com.meshwalk.app.domain.repository.PeerRepository
 import com.meshwalk.app.domain.repository.RoutingRepository
@@ -46,10 +47,14 @@ class MeshRoutingEngine @Inject constructor(
     private val deduplicator: PacketDeduplicator,
     private val offlineQueue: OfflineQueue,
     private val queuedMessageHandler: QueuedMessageHandler,
+    private val sessionManager: SessionManager,
     private val peerRepository: PeerRepository,
     private val routingRepository: RoutingRepository
 ) {
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    // Recreated on each start() so that stop()/start() cycles don't leave leaked coroutines.
+    private var scope = newScope()
+
+    private fun newScope() = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     // Packets destined for this node (after routing/decryption)
     private val _incomingPackets = MutableSharedFlow<MeshPacket>(extraBufferCapacity = 64)
@@ -72,6 +77,10 @@ class MeshRoutingEngine @Inject constructor(
      */
     fun start(nodeId: String) {
         if (isRunning) return
+        // Recreate scope if a previous stop() cancelled it.
+        if (!scope.isActive) {
+            scope = newScope()
+        }
         selfNodeId = nodeId
         isRunning = true
 
@@ -101,8 +110,10 @@ class MeshRoutingEngine @Inject constructor(
                         queuedMessageHandler.onConnectivityRestored()
                     }
                     is TransportEvent.Disconnected -> {
-                        // Update routing table — remove routes via the disconnected endpoint
-                        val disconnectedNodeId = transportManager.getNodeIdForEndpoint(event.endpointId)
+                        // nodeId is embedded in the event by the transport layer before
+                        // it cleans up its own endpoint map, so we always get the right value.
+                        val disconnectedNodeId = event.nodeId
+                            ?: transportManager.getNodeIdForEndpoint(event.endpointId)
                         if (disconnectedNodeId != null) {
                             routingTable.removeRoutesVia(disconnectedNodeId)
                         }
@@ -147,6 +158,9 @@ class MeshRoutingEngine @Inject constructor(
                 delay(30_000) // Every 30 seconds
                 routingTable.pruneStaleEntries()
                 deduplicator.pruneExpired()
+                // Evict stale in-memory session objects (sessions > 24h unused).
+                // They remain persisted to disk and are restored on next use.
+                sessionManager.pruneStaleActiveSessions()
                 emitDiagnostic(RoutingDiagnosticEvent.RouteMaintenance(
                     routeCount = routingTable.size(),
                     queuedPackets = offlineQueue.size()
@@ -163,7 +177,9 @@ class MeshRoutingEngine @Inject constructor(
     fun stop() {
         isRunning = false
         queuedMessageHandler.cancel()
-        scope.coroutineContext.cancelChildren()
+        // Cancel the entire scope (not just its children) so no new coroutines can
+        // be launched in this scope after stop(). start() will recreate the scope.
+        scope.cancel()
         Timber.d("Routing engine stopped")
     }
 

@@ -177,3 +177,21 @@ interface GroupDao {
     @Query("UPDATE groups SET membersJson = :membersJson, version = :version WHERE groupId = :groupId")
     suspend fun updateMembers(groupId: String, membersJson: String, version: Long)
 }
+
+@Dao
+interface BlockedPeerDao {
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insert(blockedPeer: BlockedPeerEntity)
+
+    @Query("SELECT * FROM blocked_peers ORDER BY blockedAt DESC")
+    fun observeAll(): Flow<List<BlockedPeerEntity>>
+
+    @Query("SELECT nodeId FROM blocked_peers")
+    suspend fun getAllBlockedIds(): List<String>
+
+    @Query("SELECT EXISTS(SELECT 1 FROM blocked_peers WHERE nodeId = :nodeId)")
+    suspend fun isBlocked(nodeId: String): Boolean
+
+    @Query("DELETE FROM blocked_peers WHERE nodeId = :nodeId")
+    suspend fun delete(nodeId: String)
+}
