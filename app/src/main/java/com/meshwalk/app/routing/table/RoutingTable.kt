@@ -105,6 +105,7 @@ class RoutingTable @Inject constructor(
     suspend fun removeRoute(destinationNodeId: String) {
         routes.remove(destinationNodeId)
         routingRepository.removeRoute(destinationNodeId)
+        _routeUpdates.value = System.currentTimeMillis()
     }
 
     /**
@@ -126,7 +127,7 @@ class RoutingTable @Inject constructor(
     /**
      * Build network graph snapshot for visualization.
      */
-    fun buildNetworkGraph(selfNodeId: String, directPeers: List<PeerNode>): NetworkGraph {
+    fun buildNetworkGraph(selfNodeId: String, directPeers: List<PeerNode>, activeOnly: Boolean = false): NetworkGraph {
         val nodes = mutableListOf<GraphNode>()
         val edges = mutableListOf<GraphEdge>()
 
@@ -137,6 +138,7 @@ class RoutingTable @Inject constructor(
             identityType = IdentityType.NAMED,
             isSelf = true,
             isDirect = true,
+            isConnected = true,
             hopCount = 0
         ))
 
@@ -147,6 +149,7 @@ class RoutingTable @Inject constructor(
                 displayName = peer.displayName,
                 identityType = peer.identityType,
                 isDirect = true,
+                isConnected = peer.isConnected,
                 hopCount = 0,
                 lastSeen = peer.lastSeen
             ))
@@ -161,12 +164,14 @@ class RoutingTable @Inject constructor(
 
         // Multi-hop nodes from routing table
         routes.values.forEach { route ->
+            if (activeOnly && route.isStale) return@forEach
             if (!nodes.any { it.nodeId == route.destinationNodeId }) {
                 nodes.add(GraphNode(
                     nodeId = route.destinationNodeId,
                     displayName = null,
                     identityType = IdentityType.ANONYMOUS,
                     isDirect = false,
+                    isConnected = !route.isStale,
                     hopCount = route.hopCount,
                     lastSeen = route.lastUpdated
                 ))

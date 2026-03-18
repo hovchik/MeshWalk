@@ -414,6 +414,7 @@ class RoutingRepositoryImpl @Inject constructor(
                         displayName = p.displayName,
                         identityType = safeEnum(p.identityType, IdentityType.NAMED),
                         isDirect = p.hopCount == 0,
+                        isConnected = p.isConnected,
                         hopCount = p.hopCount,
                         lastSeen = p.lastSeen
                     )

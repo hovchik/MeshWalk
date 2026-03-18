@@ -85,7 +85,7 @@ class NetworkGraphViewModel @Inject constructor(
             peers
         }
 
-        val graph = routingTable.buildNetworkGraph(selfId, filteredPeers)
+        val graph = routingTable.buildNetworkGraph(selfId, filteredPeers, activeOnly = showActive)
         _state.value = _state.value.copy(
             graph = graph,
             selfNodeId = selfId,
@@ -319,16 +319,16 @@ private fun NetworkCanvas(
         graph.nodes.forEach { node ->
             val pos = positions[node.nodeId] ?: return@forEach
             val nodeRadius = if (node.isSelf) 24f * scale else 16f * scale
-            val isActive = node.isSelf || node.isDirect
             val color = when {
                 node.isSelf -> selfColor
+                !node.isConnected -> offlineColor
                 node.isDirect -> directColor
                 node.hopCount > 0 -> relayColor
                 else -> offlineColor
             }
 
-            // Active pulse ring for connected nodes
-            if (isActive && !node.isSelf) {
+            // Active pulse ring for connected nodes only
+            if (node.isConnected && !node.isSelf) {
                 val expandedRadius = nodeRadius + 12f * scale * pulseRadius
                 val alpha = (1f - pulseRadius) * 0.4f
                 drawCircle(
