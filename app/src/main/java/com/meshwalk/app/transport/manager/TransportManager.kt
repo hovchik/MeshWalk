@@ -51,6 +51,9 @@ class TransportManager @Inject constructor(
     )
     val transportEvents: SharedFlow<TransportEvent> = _transportEvents
 
+    private val _isScanning = MutableStateFlow(false)
+    override val isScanning: StateFlow<Boolean> = _isScanning.asStateFlow()
+
     // Endpoint to transport mapping (accessed from multiple coroutines)
     private val endpointTransportMap = java.util.concurrent.ConcurrentHashMap<String, MeshTransport>()
 
@@ -163,11 +166,13 @@ class TransportManager @Inject constructor(
                 Timber.w(it, "BLE discovery failed")
             }
         }
+        _isScanning.value = true
     }
 
     override suspend fun stopDiscovery() {
         nearbyTransport.stopDiscovery()
         bleTransport.stopDiscovery()
+        _isScanning.value = false
     }
 
     override suspend fun startAdvertising() {

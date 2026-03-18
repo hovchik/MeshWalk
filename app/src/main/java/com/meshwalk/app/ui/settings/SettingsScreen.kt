@@ -24,6 +24,7 @@ import com.meshwalk.app.domain.model.*
 import com.meshwalk.app.domain.repository.GroupRepository
 import com.meshwalk.app.domain.repository.IdentityRepository
 import com.meshwalk.app.domain.repository.SettingsRepository
+import com.meshwalk.app.domain.usecase.TransportManagerPort
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -33,12 +34,14 @@ import javax.inject.Inject
 class SettingsViewModel @Inject constructor(
     private val settingsRepo: SettingsRepository,
     private val identityRepo: IdentityRepository,
-    private val groupRepo: GroupRepository
+    private val groupRepo: GroupRepository,
+    private val transportManager: TransportManagerPort
 ) : ViewModel() {
 
     data class UiState(
         val settings: AppSettings = AppSettings(),
-        val identity: NodeIdentity? = null
+        val identity: NodeIdentity? = null,
+        val isScanning: Boolean = false
     )
 
     private val _state = MutableStateFlow(UiState())
@@ -48,9 +51,10 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             combine(
                 settingsRepo.observeSettings(),
-                identityRepo.observeActiveIdentity()
-            ) { settings, identity ->
-                UiState(settings = settings, identity = identity)
+                identityRepo.observeActiveIdentity(),
+                transportManager.isScanning
+            ) { settings, identity, scanning ->
+                UiState(settings = settings, identity = identity, isScanning = scanning)
             }.collect { _state.value = it }
         }
     }
@@ -59,6 +63,20 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             val updated = transform(_state.value.settings)
             settingsRepo.updateSettings(updated)
+        }
+    }
+
+    fun startScanning() {
+        viewModelScope.launch {
+            transportManager.startDiscovery()
+            transportManager.startAdvertising()
+        }
+    }
+
+    fun stopScanning() {
+        viewModelScope.launch {
+            transportManager.stopDiscovery()
+            transportManager.stopAdvertising()
         }
     }
 
@@ -103,6 +121,41 @@ fun SettingsScreen(
 
         // Scanning
         SectionHeader("Discovery & Scanning")
+        ListItem(
+            headlineContent = { Text("Network scanning") },
+            supportingContent = {
+                Text(
+                    if (state.isScanning) "Scanning for nearby peers..."
+                    else "Scanning is stopped"
+                )
+            },
+            leadingContent = {
+                Icon(
+                    if (state.isScanning) Icons.Filled.Radar else Icons.Filled.WifiFind,
+                    contentDescription = null,
+                    tint = if (state.isScanning) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.outline
+                )
+            },
+            trailingContent = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (state.isScanning) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                    }
+                    Switch(
+                        checked = state.isScanning,
+                        onCheckedChange = {
+                            if (state.isScanning) viewModel.stopScanning()
+                            else viewModel.startScanning()
+                        }
+                    )
+                }
+            }
+        )
         ScanMode.entries.forEach { mode ->
             ListItem(
                 modifier = Modifier.clickable {
@@ -174,6 +227,45 @@ fun SettingsScreen(
             subtitle = "Show lock icon on encrypted chats",
             checked = state.settings.showEncryptionBadge,
             onToggle = { viewModel.updateSettings { it.copy(showEncryptionBadge = !it.showEncryptionBadge) } }
+        )
+        ListItem(
+            headlineContent = { Text("Network graph refresh") },
+            supportingContent = {
+                Text("Refresh every ${state.settings.networkGraphRefreshSeconds}s")
+            },
+            trailingContent = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    FilledTonalIconButton(
+                        onClick = {
+                            val current = state.settings.networkGraphRefreshSeconds
+                            if (current > 1) {
+                                viewModel.updateSettings { it.copy(networkGraphRefreshSeconds = current - 1) }
+                            }
+                        },
+                        enabled = state.settings.networkGraphRefreshSeconds > 1
+                    ) {
+                        Icon(Icons.Filled.Remove, "Decrease")
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "${state.settings.networkGraphRefreshSeconds}s",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    FilledTonalIconButton(
+                        onClick = {
+                            val current = state.settings.networkGraphRefreshSeconds
+                            if (current < 30) {
+                                viewModel.updateSettings { it.copy(networkGraphRefreshSeconds = current + 1) }
+                            }
+                        },
+                        enabled = state.settings.networkGraphRefreshSeconds < 30
+                    ) {
+                        Icon(Icons.Filled.Add, "Increase")
+                    }
+                }
+            }
         )
         HorizontalDivider()
 

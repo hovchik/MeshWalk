@@ -122,6 +122,9 @@ interface PeerDao {
 
     @Query("DELETE FROM peers WHERE lastSeen < :threshold AND publicExchangeKey IS NULL AND publicSigningKey IS NULL AND displayName IS NULL")
     suspend fun pruneStale(threshold: Long)
+
+    @Query("UPDATE peers SET isConnected = 0")
+    suspend fun resetAllConnectionStates()
 }
 
 @Dao

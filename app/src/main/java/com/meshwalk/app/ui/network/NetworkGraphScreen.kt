@@ -1,5 +1,6 @@
 package com.meshwalk.app.ui.network
 
+import androidx.compose.animation.core.*
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.*
@@ -11,7 +12,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.*
-import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.*
@@ -23,8 +23,11 @@ import androidx.lifecycle.viewModelScope
 import com.meshwalk.app.domain.model.*
 import com.meshwalk.app.domain.repository.IdentityRepository
 import com.meshwalk.app.domain.repository.PeerRepository
+import com.meshwalk.app.domain.repository.SettingsRepository
+import com.meshwalk.app.domain.usecase.TransportManagerPort
 import com.meshwalk.app.routing.table.RoutingTable
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -34,14 +37,19 @@ import kotlin.math.*
 class NetworkGraphViewModel @Inject constructor(
     private val peerRepo: PeerRepository,
     private val routingTable: RoutingTable,
-    private val identityRepo: IdentityRepository
+    private val identityRepo: IdentityRepository,
+    private val settingsRepo: SettingsRepository,
+    private val transportManager: TransportManagerPort
 ) : ViewModel() {
 
     data class UiState(
         val graph: NetworkGraph? = null,
         val selfNodeId: String = "",
         val peerCount: Int = 0,
-        val routeCount: Int = 0
+        val activePeerCount: Int = 0,
+        val routeCount: Int = 0,
+        val showOnlyActive: Boolean = true,
+        val lastUpdated: Long = 0L
     )
 
     private val _state = MutableStateFlow(UiState())
@@ -49,20 +57,82 @@ class NetworkGraphViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
+            // Reset stale connection states left over from a previous session
+            // (e.g. app was killed before disconnect callbacks could fire).
+            peerRepo.resetAllConnectionStates()
+
             val identity = identityRepo.getActiveIdentity()
             val selfId = identity?.nodeId ?: ""
 
-            peerRepo.observeNearbyPeers().collect { peers ->
-                val graph = routingTable.buildNetworkGraph(selfId, peers)
-                _state.value = UiState(
-                    graph = graph,
-                    selfNodeId = selfId,
-                    peerCount = peers.size,
-                    routeCount = routingTable.size()
-                )
+            // Periodic ticker driven by the user-configurable refresh interval.
+            // Pauses when scanning is stopped so we don't poll unnecessarily.
+            val ticker = combine(
+                settingsRepo.observeSettings()
+                    .map { it.networkGraphRefreshSeconds }
+                    .distinctUntilChanged(),
+                transportManager.isScanning
+            ) { seconds, scanning -> seconds to scanning }
+                .flatMapLatest { (seconds, scanning) ->
+                    if (scanning) {
+                        flow {
+                            while (true) {
+                                emit(Unit)
+                                delay(seconds * 1_000L)
+                            }
+                        }
+                    } else {
+                        // Emit once so the graph shows current state, then stop polling
+                        flowOf(Unit)
+                    }
+                }
+
+            // Combine peer changes, route changes, and periodic ticker
+            combine(
+                peerRepo.observeNearbyPeers(),
+                routingTable.routeUpdates,
+                ticker
+            ) { peers, _, _ ->
+                peers
+            }.collect { peers ->
+                rebuildGraph(selfId, peers)
             }
         }
     }
+
+    private fun rebuildGraph(selfId: String, peers: List<PeerNode>) {
+        val showActive = _state.value.showOnlyActive
+        val now = System.currentTimeMillis()
+
+        // Cross-validate: peer must both claim isConnected AND have been seen
+        // recently to be considered truly active.
+        val trulyActivePeers = peers.filter {
+            it.isConnected && (now - it.lastSeen < RoutingEntry.STALE_THRESHOLD_MS)
+        }
+
+        val filteredPeers = if (showActive) trulyActivePeers else peers
+
+        val graph = routingTable.buildNetworkGraph(selfId, filteredPeers, activeOnly = showActive)
+        _state.value = _state.value.copy(
+            graph = graph,
+            selfNodeId = selfId,
+            peerCount = peers.size,
+            activePeerCount = trulyActivePeers.size,
+            routeCount = routingTable.size(),
+            lastUpdated = now
+        )
+    }
+
+    fun toggleActiveFilter() {
+        _state.update { it.copy(showOnlyActive = !it.showOnlyActive) }
+        // Trigger immediate rebuild
+        viewModelScope.launch {
+            val identity = identityRepo.getActiveIdentity()
+            val selfId = identity?.nodeId ?: ""
+            val peers = peerRepo.observeNearbyPeers().first()
+            rebuildGraph(selfId, peers)
+        }
+    }
+
 }
 
 @Composable
@@ -70,52 +140,107 @@ fun NetworkGraphScreen(viewModel: NetworkGraphViewModel = hiltViewModel()) {
     val state by viewModel.state.collectAsState()
 
     Column {
-        Text(
-            "${state.peerCount} peers • ${state.routeCount} routes",
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
-        )
-        Column {
-            // Legend
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.SpaceEvenly
-            ) {
-                LegendItem(color = Color(0xFF00BFA5), label = "You")
-                LegendItem(color = Color(0xFF2196F3), label = "Direct")
-                LegendItem(color = Color(0xFFFF9800), label = "Relay")
-                LegendItem(color = Color(0xFF9E9E9E), label = "Offline")
-            }
-
-            // Graph canvas
-            val graph = state.graph
-            if (graph != null && graph.nodes.isNotEmpty()) {
-                NetworkCanvas(
-                    graph = graph,
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(16.dp)
+        // Status bar with peer counts and filter toggle
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column {
+                Text(
+                    "${state.activePeerCount} active • ${state.peerCount} total • ${state.routeCount} routes",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-            } else {
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(
-                            Icons.Filled.Hub,
-                            contentDescription = null,
-                            modifier = Modifier.size(64.dp),
-                            tint = MaterialTheme.colorScheme.outline
-                        )
-                        Spacer(modifier = Modifier.height(16.dp))
+                if (state.lastUpdated > 0) {
+                    val elapsed = remember(state.lastUpdated) {
+                        formatElapsed(state.lastUpdated)
+                    }
+                    // Re-compose periodically to update relative time
+                    var currentElapsed by remember { mutableStateOf(elapsed) }
+                    LaunchedEffect(state.lastUpdated) {
+                        while (true) {
+                            currentElapsed = formatElapsed(state.lastUpdated)
+                            delay(1_000L)
+                        }
+                    }
+                    Text(
+                        "Updated $currentElapsed",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.outline
+                    )
+                }
+            }
+            FilterChip(
+                selected = state.showOnlyActive,
+                onClick = { viewModel.toggleActiveFilter() },
+                label = { Text("Active only") },
+                leadingIcon = if (state.showOnlyActive) {
+                    { Icon(Icons.Filled.Visibility, contentDescription = null, modifier = Modifier.size(16.dp)) }
+                } else null
+            )
+        }
+
+        // Legend
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.SpaceEvenly
+        ) {
+            LegendItem(color = Color(0xFF00BFA5), label = "You")
+            LegendItem(color = Color(0xFF2196F3), label = "Direct")
+            LegendItem(color = Color(0xFFFF9800), label = "Relay")
+            LegendItem(color = Color(0xFFE53935), label = "Inactive")
+        }
+
+        // Graph canvas
+        val graph = state.graph
+        if (graph != null && graph.nodes.size > 1) {
+            NetworkCanvas(
+                graph = graph,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(16.dp)
+            )
+        } else {
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    // Scanning animation
+                    val infiniteTransition = rememberInfiniteTransition(label = "scan")
+                    val pulseAlpha by infiniteTransition.animateFloat(
+                        initialValue = 0.3f,
+                        targetValue = 1f,
+                        animationSpec = infiniteRepeatable(
+                            animation = tween(1200, easing = EaseInOut),
+                            repeatMode = RepeatMode.Reverse
+                        ),
+                        label = "pulse"
+                    )
+                    Icon(
+                        Icons.Filled.Hub,
+                        contentDescription = null,
+                        modifier = Modifier.size(64.dp),
+                        tint = MaterialTheme.colorScheme.outline.copy(alpha = pulseAlpha)
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text(
+                        if (state.showOnlyActive) "No active peers connected"
+                        else "No network nodes discovered",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    if (state.showOnlyActive && state.peerCount > 0) {
+                        Spacer(modifier = Modifier.height(8.dp))
                         Text(
-                            "No network nodes discovered",
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            "${state.peerCount} peers discovered but not connected",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.outline
                         )
                     }
                 }
@@ -146,10 +271,22 @@ private fun NetworkCanvas(
     val selfColor = Color(0xFF00BFA5)
     val directColor = Color(0xFF2196F3)
     val relayColor = Color(0xFFFF9800)
-    val offlineColor = Color(0xFF9E9E9E)
+    val inactiveColor = Color(0xFFE53935)
     val edgeColor = Color(0xFF546E7A)
     val edgeActiveColor = Color(0xFF00BFA5)
     val textMeasurer = rememberTextMeasurer()
+
+    // Pulse animation for active nodes
+    val infiniteTransition = rememberInfiniteTransition(label = "nodePulse")
+    val pulseRadius by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(2000, easing = EaseOut),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "pulse"
+    )
 
     Canvas(
         modifier = modifier
@@ -164,16 +301,16 @@ private fun NetworkCanvas(
         val centerY = size.height / 2 + offset.y
         val radius = minOf(size.width, size.height) * 0.35f * scale
 
-        // Calculate node positions using force-directed-like layout
+        // Calculate node positions
         val positions = calculateNodePositions(graph, centerX, centerY, radius)
 
-        // Draw edges first
+        // Draw edges
         graph.edges.forEach { edge ->
             val fromPos = positions[edge.fromNodeId]
             val toPos = positions[edge.toNodeId]
             if (fromPos != null && toPos != null) {
                 val lineColor = if (edge.isActive) edgeActiveColor else edgeColor
-                val strokeWidth = if (edge.isActive) 2f * scale else 1f * scale
+                val strokeWidth = if (edge.isActive) 2.5f * scale else 1f * scale
 
                 drawLine(
                     color = lineColor,
@@ -184,6 +321,24 @@ private fun NetworkCanvas(
                         floatArrayOf(10f, 10f)
                     ) else null
                 )
+
+                // Signal strength indicator on active edges
+                if (edge.isActive && edge.signalStrength != null) {
+                    val midX = (fromPos.x + toPos.x) / 2
+                    val midY = (fromPos.y + toPos.y) / 2
+                    val bars = signalBars(edge.signalStrength)
+                    val barLabel = textMeasurer.measure(
+                        text = AnnotatedString(bars),
+                        style = TextStyle(
+                            fontSize = (8 * scale).sp,
+                            color = edgeActiveColor
+                        )
+                    )
+                    drawText(
+                        textLayoutResult = barLabel,
+                        topLeft = Offset(midX - barLabel.size.width / 2, midY - barLabel.size.height / 2)
+                    )
+                }
             }
         }
 
@@ -193,18 +348,49 @@ private fun NetworkCanvas(
             val nodeRadius = if (node.isSelf) 24f * scale else 16f * scale
             val color = when {
                 node.isSelf -> selfColor
+                !node.isConnected -> inactiveColor
                 node.isDirect -> directColor
                 node.hopCount > 0 -> relayColor
-                else -> offlineColor
+                else -> inactiveColor
             }
 
-            // Node circle
+            // Active pulse ring for connected nodes only
+            if (node.isConnected && !node.isSelf) {
+                val expandedRadius = nodeRadius + 12f * scale * pulseRadius
+                val alpha = (1f - pulseRadius) * 0.4f
+                drawCircle(
+                    color = color.copy(alpha = alpha),
+                    radius = expandedRadius,
+                    center = pos
+                )
+            }
+
+            // Self node gets a subtle constant glow
+            if (node.isSelf) {
+                drawCircle(
+                    color = selfColor.copy(alpha = 0.15f),
+                    radius = nodeRadius + 10f * scale,
+                    center = pos
+                )
+            }
+
+            // Node circle with border
             drawCircle(color = color, radius = nodeRadius, center = pos)
             drawCircle(
                 color = Color.White.copy(alpha = 0.3f),
                 radius = nodeRadius - 3f * scale,
                 center = pos
             )
+
+            // Connection type icon ring for non-self nodes
+            if (!node.isSelf) {
+                drawCircle(
+                    color = color,
+                    radius = nodeRadius,
+                    center = pos,
+                    style = Stroke(width = 2f * scale)
+                )
+            }
 
             // Node label
             val label = when {
@@ -228,6 +414,24 @@ private fun NetworkCanvas(
                     pos.y + nodeRadius + 4f * scale
                 )
             )
+
+            // Hop count badge for relay nodes
+            if (node.hopCount > 0) {
+                val hopText = textMeasurer.measure(
+                    text = AnnotatedString("${node.hopCount}h"),
+                    style = TextStyle(
+                        fontSize = (8 * scale).sp,
+                        color = Color.White
+                    )
+                )
+                drawText(
+                    textLayoutResult = hopText,
+                    topLeft = Offset(
+                        pos.x - hopText.size.width / 2,
+                        pos.y - 3f * scale
+                    )
+                )
+            }
         }
     }
 }
@@ -272,4 +476,23 @@ private fun calculateNodePositions(
     }
 
     return positions
+}
+
+/** Map RSSI to a visual signal bar string. */
+private fun signalBars(rssi: Int): String = when {
+    rssi >= -50 -> "||||"
+    rssi >= -65 -> "|||"
+    rssi >= -80 -> "||"
+    else -> "|"
+}
+
+/** Format millisecond timestamp as relative elapsed time. */
+private fun formatElapsed(timestampMs: Long): String {
+    val elapsed = System.currentTimeMillis() - timestampMs
+    return when {
+        elapsed < 2_000 -> "just now"
+        elapsed < 60_000 -> "${elapsed / 1000}s ago"
+        elapsed < 3_600_000 -> "${elapsed / 60_000}m ago"
+        else -> "${elapsed / 3_600_000}h ago"
+    }
 }

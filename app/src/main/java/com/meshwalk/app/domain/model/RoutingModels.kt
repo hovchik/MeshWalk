@@ -36,6 +36,7 @@ data class GraphNode(
     val identityType: IdentityType,
     val isSelf: Boolean = false,
     val isDirect: Boolean = false,
+    val isConnected: Boolean = false,
     val hopCount: Int = 0,
     val lastSeen: Long = 0
 )
