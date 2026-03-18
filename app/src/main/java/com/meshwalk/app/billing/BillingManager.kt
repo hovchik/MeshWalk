@@ -41,7 +41,8 @@ data class SubscriptionState(
     val isPremium: Boolean = false,
     val planName: String = "Free",
     val expiresAt: Long? = null,
-    val isGracePeriod: Boolean = false
+    val isGracePeriod: Boolean = false,
+    val isFreeTrial: Boolean = false
 ) {
     val isActive: Boolean get() = isPremium && !isExpired
     private val isExpired: Boolean
@@ -187,14 +188,18 @@ class BillingManager @Inject constructor(
             name = "MeshWalk Pro Monthly",
             description = "All premium features, billed monthly",
             formattedPrice = "$3.99",
-            billingPeriod = BillingPeriod.MONTHLY
+            billingPeriod = BillingPeriod.MONTHLY,
+            hasFreeTrial = true,
+            freeTrialDays = SubscriptionPlans.FREE_TRIAL_DAYS
         ),
         PlanDetails(
             productId = SubscriptionPlans.PRO_ANNUAL_ID,
             name = "MeshWalk Pro Annual",
             description = "All premium features, save 37%",
             formattedPrice = "$29.99",
-            billingPeriod = BillingPeriod.ANNUAL
+            billingPeriod = BillingPeriod.ANNUAL,
+            hasFreeTrial = true,
+            freeTrialDays = SubscriptionPlans.FREE_TRIAL_DAYS
         ),
         PlanDetails(
             productId = SubscriptionPlans.PRO_LIFETIME_ID,

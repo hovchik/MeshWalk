@@ -620,16 +620,20 @@ private fun SubscriptionStatusItem(
         headlineContent = {
             if (subscriptionState.isActive) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("MeshWalk Pro")
+                    Text(if (subscriptionState.isFreeTrial) "Free Trial" else "MeshWalk Pro")
                     Spacer(modifier = Modifier.width(8.dp))
                     Surface(
                         shape = MaterialTheme.shapes.extraSmall,
-                        color = MaterialTheme.colorScheme.primary
+                        color = if (subscriptionState.isFreeTrial)
+                            MaterialTheme.colorScheme.tertiary
+                        else MaterialTheme.colorScheme.primary
                     ) {
                         Text(
-                            "ACTIVE",
+                            if (subscriptionState.isFreeTrial) "TRIAL" else "ACTIVE",
                             style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onPrimary,
+                            color = if (subscriptionState.isFreeTrial)
+                                MaterialTheme.colorScheme.onTertiary
+                            else MaterialTheme.colorScheme.onPrimary,
                             modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                         )
                     }
@@ -640,19 +644,27 @@ private fun SubscriptionStatusItem(
         },
         supportingContent = {
             Text(
-                if (subscriptionState.isActive) {
-                    "Plan: ${subscriptionState.planName}"
-                } else {
-                    "Unlock larger groups, extended history & more"
+                when {
+                    subscriptionState.isFreeTrial && subscriptionState.expiresAt != null -> {
+                        val daysLeft = ((subscriptionState.expiresAt - System.currentTimeMillis()) /
+                                (24 * 60 * 60 * 1000)).toInt()
+                        "$daysLeft days left in trial"
+                    }
+                    subscriptionState.isActive -> "Plan: ${subscriptionState.planName}"
+                    else -> "Try free for 7 days, then unlock all features"
                 }
             )
         },
         leadingContent = {
             Icon(
-                Icons.Filled.WorkspacePremium,
+                if (subscriptionState.isFreeTrial) Icons.Filled.Timer
+                else Icons.Filled.WorkspacePremium,
                 contentDescription = null,
-                tint = if (subscriptionState.isActive) MaterialTheme.colorScheme.primary
-                else MaterialTheme.colorScheme.outline
+                tint = when {
+                    subscriptionState.isFreeTrial -> MaterialTheme.colorScheme.tertiary
+                    subscriptionState.isActive -> MaterialTheme.colorScheme.primary
+                    else -> MaterialTheme.colorScheme.outline
+                }
             )
         },
         trailingContent = { Icon(Icons.Filled.ChevronRight, null) }

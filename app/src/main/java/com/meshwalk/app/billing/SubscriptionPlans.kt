@@ -17,6 +17,9 @@ object SubscriptionPlans {
     /** Google Play product ID for lifetime one-time purchase. */
     const val PRO_LIFETIME_ID = "meshwalk_pro_lifetime"
 
+    /** Free trial duration in days. Configured in Google Play Console per offer. */
+    const val FREE_TRIAL_DAYS = 7
+
     /** All subscription product IDs to query from Google Play. */
     val SUBSCRIPTION_IDS = listOf(PRO_MONTHLY_ID, PRO_ANNUAL_ID)
 
@@ -33,7 +36,9 @@ data class PlanDetails(
     val description: String,
     val formattedPrice: String,
     val billingPeriod: BillingPeriod,
-    val offerToken: String? = null
+    val offerToken: String? = null,
+    val hasFreeTrial: Boolean = false,
+    val freeTrialDays: Int = 0
 )
 
 enum class BillingPeriod(val label: String) {

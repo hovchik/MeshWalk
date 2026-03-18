@@ -153,6 +153,12 @@ fun SubscriptionScreen(
                 ActiveSubscriptionBanner(state.subscriptionState)
             } else {
                 ProHeader()
+                // Free trial callout
+                val hasTrialPlans = state.availablePlans.any { it.hasFreeTrial }
+                if (hasTrialPlans) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    FreeTrialBanner()
+                }
             }
 
             Spacer(modifier = Modifier.height(24.dp))
@@ -185,6 +191,16 @@ fun SubscriptionScreen(
                 Spacer(modifier = Modifier.height(16.dp))
 
                 // Purchase button
+                val selectedPlan = state.availablePlans.find {
+                    it.productId == state.selectedPlanId
+                }
+                val buttonText = when {
+                    state.isPurchasing -> "Processing..."
+                    selectedPlan?.hasFreeTrial == true ->
+                        "Start ${selectedPlan.freeTrialDays}-Day Free Trial"
+                    else -> "Subscribe Now"
+                }
+
                 Button(
                     onClick = {
                         (context as? Activity)?.let { activity ->
@@ -204,11 +220,7 @@ fun SubscriptionScreen(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                     }
-                    Text(
-                        if (state.isPurchasing) "Processing..."
-                        else "Subscribe Now",
-                        style = MaterialTheme.typography.titleMedium
-                    )
+                    Text(buttonText, style = MaterialTheme.typography.titleMedium)
                 }
 
                 Spacer(modifier = Modifier.height(12.dp))
@@ -232,9 +244,11 @@ fun SubscriptionScreen(
 
                 // Legal text
                 Text(
-                    "Subscriptions auto-renew unless cancelled at least 24 hours before " +
-                            "the end of the current period. Manage subscriptions in Google Play " +
-                            "Store settings.",
+                    "Free trial available for new subscribers. Your subscription begins " +
+                            "after the 7-day trial ends. Cancel anytime during the trial at no " +
+                            "charge. Subscriptions auto-renew unless cancelled at least 24 hours " +
+                            "before the end of the current period. Manage subscriptions in " +
+                            "Google Play Store settings.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center,
@@ -278,11 +292,16 @@ private fun ProHeader() {
 
 @Composable
 private fun ActiveSubscriptionBanner(subscription: SubscriptionState) {
+    val containerColor = if (subscription.isFreeTrial)
+        MaterialTheme.colorScheme.tertiaryContainer
+    else MaterialTheme.colorScheme.primaryContainer
+    val contentColor = if (subscription.isFreeTrial)
+        MaterialTheme.colorScheme.onTertiaryContainer
+    else MaterialTheme.colorScheme.onPrimaryContainer
+
     Card(
         modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.primaryContainer
-        )
+        colors = CardDefaults.cardColors(containerColor = containerColor)
     ) {
         Row(
             modifier = Modifier
@@ -291,41 +310,81 @@ private fun ActiveSubscriptionBanner(subscription: SubscriptionState) {
             verticalAlignment = Alignment.CenterVertically
         ) {
             Icon(
-                Icons.Filled.Verified,
+                if (subscription.isFreeTrial) Icons.Filled.Timer else Icons.Filled.Verified,
                 contentDescription = null,
                 modifier = Modifier.size(40.dp),
-                tint = MaterialTheme.colorScheme.primary
+                tint = if (subscription.isFreeTrial)
+                    MaterialTheme.colorScheme.tertiary
+                else MaterialTheme.colorScheme.primary
             )
             Spacer(modifier = Modifier.width(16.dp))
             Column {
                 Text(
-                    "MeshWalk Pro Active",
+                    if (subscription.isFreeTrial) "Free Trial Active"
+                    else "MeshWalk Pro Active",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                    color = contentColor
                 )
                 Text(
-                    "Plan: ${subscription.planName}",
+                    if (subscription.isFreeTrial) "All Pro features unlocked"
+                    else "Plan: ${subscription.planName}",
                     style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                    color = contentColor
                 )
                 if (subscription.expiresAt != null) {
                     val daysLeft = ((subscription.expiresAt - System.currentTimeMillis()) /
                             (24 * 60 * 60 * 1000)).toInt()
                     if (daysLeft > 0) {
                         Text(
-                            "${daysLeft} days remaining",
+                            if (subscription.isFreeTrial) "$daysLeft days left in trial"
+                            else "$daysLeft days remaining",
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
+                            color = contentColor.copy(alpha = 0.7f)
                         )
                     }
                 } else {
                     Text(
                         "Lifetime access",
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
+                        color = contentColor.copy(alpha = 0.7f)
                     )
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun FreeTrialBanner() {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.5f)
+    ) {
+        Row(
+            modifier = Modifier.padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                Icons.Filled.CardGiftcard,
+                contentDescription = null,
+                modifier = Modifier.size(24.dp),
+                tint = MaterialTheme.colorScheme.tertiary
+            )
+            Spacer(modifier = Modifier.width(12.dp))
+            Column {
+                Text(
+                    "Try Pro free for 7 days",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                    "Full access to all features. Cancel anytime, no charge.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
         }
     }
@@ -420,6 +479,20 @@ private fun PlanCard(
                             style = MaterialTheme.typography.titleSmall,
                             fontWeight = FontWeight.SemiBold
                         )
+                        if (plan.hasFreeTrial) {
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Surface(
+                                shape = RoundedCornerShape(4.dp),
+                                color = MaterialTheme.colorScheme.tertiary
+                            ) {
+                                Text(
+                                    "${plan.freeTrialDays}-DAY TRIAL",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onTertiary,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                )
+                            }
+                        }
                         if (isRecommended) {
                             Spacer(modifier = Modifier.width(8.dp))
                             Surface(

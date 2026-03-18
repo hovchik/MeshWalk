@@ -123,31 +123,41 @@ class GooglePlayBillingProvider(
         val plans = mutableListOf<PlanDetails>()
 
         subscriptionProducts[SubscriptionPlans.PRO_MONTHLY_ID]?.let { product ->
-            val offer = product.subscriptionOfferDetails?.firstOrNull()
-            val price = offer?.pricingPhases?.pricingPhaseList?.firstOrNull()
+            val (offer, trialInfo) = findBestOffer(product)
+            val paidPhase = offer?.pricingPhases?.pricingPhaseList
+                ?.firstOrNull { it.priceAmountMicros > 0 }
             plans.add(
                 PlanDetails(
                     productId = product.productId,
                     name = "MeshWalk Pro Monthly",
-                    description = "All premium features, billed monthly",
-                    formattedPrice = price?.formattedPrice ?: "$3.99",
+                    description = if (trialInfo != null)
+                        "${trialInfo.days}-day free trial, then billed monthly"
+                    else "All premium features, billed monthly",
+                    formattedPrice = paidPhase?.formattedPrice ?: "$3.99",
                     billingPeriod = BillingPeriod.MONTHLY,
-                    offerToken = offer?.offerToken
+                    offerToken = offer?.offerToken,
+                    hasFreeTrial = trialInfo != null,
+                    freeTrialDays = trialInfo?.days ?: 0
                 )
             )
         }
 
         subscriptionProducts[SubscriptionPlans.PRO_ANNUAL_ID]?.let { product ->
-            val offer = product.subscriptionOfferDetails?.firstOrNull()
-            val price = offer?.pricingPhases?.pricingPhaseList?.firstOrNull()
+            val (offer, trialInfo) = findBestOffer(product)
+            val paidPhase = offer?.pricingPhases?.pricingPhaseList
+                ?.firstOrNull { it.priceAmountMicros > 0 }
             plans.add(
                 PlanDetails(
                     productId = product.productId,
                     name = "MeshWalk Pro Annual",
-                    description = "All premium features, save 37%",
-                    formattedPrice = price?.formattedPrice ?: "$29.99",
+                    description = if (trialInfo != null)
+                        "${trialInfo.days}-day free trial, then save 37%"
+                    else "All premium features, save 37%",
+                    formattedPrice = paidPhase?.formattedPrice ?: "$29.99",
                     billingPeriod = BillingPeriod.ANNUAL,
-                    offerToken = offer?.offerToken
+                    offerToken = offer?.offerToken,
+                    hasFreeTrial = trialInfo != null,
+                    freeTrialDays = trialInfo?.days ?: 0
                 )
             )
         }
@@ -166,6 +176,49 @@ class GooglePlayBillingProvider(
         }
 
         return plans
+    }
+
+    private data class TrialInfo(val days: Int)
+
+    /**
+     * Find the best offer for a subscription product, preferring offers
+     * that include a free trial phase (priceAmountMicros == 0).
+     *
+     * In Google Play Console, free trials are configured as an offer with
+     * a pricing phase where the price is 0 and billingPeriod is e.g. "P1W" (1 week)
+     * or "P7D" (7 days).
+     */
+    private fun findBestOffer(
+        product: ProductDetails
+    ): Pair<ProductDetails.SubscriptionOfferDetails?, TrialInfo?> {
+        val offers = product.subscriptionOfferDetails ?: return Pair(null, null)
+
+        // Prefer offer with a free trial phase
+        for (offer in offers) {
+            val phases = offer.pricingPhases.pricingPhaseList
+            val freePhase = phases.firstOrNull { it.priceAmountMicros == 0L }
+            if (freePhase != null) {
+                val trialDays = parseBillingPeriodDays(freePhase.billingPeriod)
+                return Pair(offer, TrialInfo(days = trialDays))
+            }
+        }
+
+        // No trial offer found, use the first available
+        return Pair(offers.firstOrNull(), null)
+    }
+
+    /**
+     * Parse ISO 8601 duration to approximate days.
+     * Google Play uses formats like "P7D", "P1W", "P1M", "P1Y".
+     */
+    private fun parseBillingPeriodDays(period: String): Int {
+        return when {
+            period.endsWith("D") -> period.filter { it.isDigit() }.toIntOrNull() ?: 7
+            period.endsWith("W") -> (period.filter { it.isDigit() }.toIntOrNull() ?: 1) * 7
+            period.endsWith("M") -> (period.filter { it.isDigit() }.toIntOrNull() ?: 1) * 30
+            period.endsWith("Y") -> (period.filter { it.isDigit() }.toIntOrNull() ?: 1) * 365
+            else -> SubscriptionPlans.FREE_TRIAL_DAYS
+        }
     }
 
     /**
@@ -282,11 +335,23 @@ class GooglePlayBillingProvider(
 
         // Determine expiration — lifetime purchases don't expire
         val isLifetime = SubscriptionPlans.PRO_LIFETIME_ID in purchase.products
+
+        // Detect if this is a free trial: a recent purchase (within trial window)
+        // that hasn't been charged yet. Google Play auto-acknowledges trial starts
+        // but the purchase object doesn't explicitly flag trials, so we infer
+        // from the purchase age vs trial duration.
+        val trialDurationMs = SubscriptionPlans.FREE_TRIAL_DAYS.toLong() * 24 * 60 * 60 * 1000
+        val purchaseAge = System.currentTimeMillis() - purchase.purchaseTime
+        val isSubscription = !isLifetime
+        val isInTrialWindow = isSubscription && purchaseAge < trialDurationMs
+
         val expiresAt = if (isLifetime) null else {
             // Google doesn't expose exact expiry in Purchase object;
             // use purchaseTime + period as an estimate. The real expiry
             // is validated server-side via Google Play Developer API.
-            val periodMs = if (SubscriptionPlans.PRO_ANNUAL_ID in purchase.products) {
+            val periodMs = if (isInTrialWindow) {
+                trialDurationMs
+            } else if (SubscriptionPlans.PRO_ANNUAL_ID in purchase.products) {
                 365L * 24 * 60 * 60 * 1000
             } else {
                 30L * 24 * 60 * 60 * 1000
@@ -296,9 +361,10 @@ class GooglePlayBillingProvider(
 
         _subscriptionState.value = SubscriptionState(
             isPremium = true,
-            planName = planName,
+            planName = if (isInTrialWindow) "Pro Trial" else planName,
             expiresAt = expiresAt,
-            isGracePeriod = false
+            isGracePeriod = false,
+            isFreeTrial = isInTrialWindow
         )
 
         Timber.d("Subscription activated: $planName")
