@@ -23,6 +23,7 @@ import androidx.lifecycle.viewModelScope
 import com.meshwalk.app.domain.model.*
 import com.meshwalk.app.domain.repository.IdentityRepository
 import com.meshwalk.app.domain.repository.PeerRepository
+import com.meshwalk.app.domain.repository.SettingsRepository
 import com.meshwalk.app.routing.table.RoutingTable
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.delay
@@ -35,7 +36,8 @@ import kotlin.math.*
 class NetworkGraphViewModel @Inject constructor(
     private val peerRepo: PeerRepository,
     private val routingTable: RoutingTable,
-    private val identityRepo: IdentityRepository
+    private val identityRepo: IdentityRepository,
+    private val settingsRepo: SettingsRepository
 ) : ViewModel() {
 
     data class UiState(
@@ -56,13 +58,18 @@ class NetworkGraphViewModel @Inject constructor(
             val identity = identityRepo.getActiveIdentity()
             val selfId = identity?.nodeId ?: ""
 
-            // Periodic ticker to detect stale peers and keep graph fresh
-            val ticker = flow {
-                while (true) {
-                    emit(Unit)
-                    delay(5_000L)
+            // Periodic ticker driven by the user-configurable refresh interval
+            val ticker = settingsRepo.observeSettings()
+                .map { it.networkGraphRefreshSeconds }
+                .distinctUntilChanged()
+                .flatMapLatest { seconds ->
+                    flow {
+                        while (true) {
+                            emit(Unit)
+                            delay(seconds * 1_000L)
+                        }
+                    }
                 }
-            }
 
             // Combine peer changes, route changes, and periodic ticker
             combine(
@@ -166,7 +173,7 @@ fun NetworkGraphScreen(viewModel: NetworkGraphViewModel = hiltViewModel()) {
             LegendItem(color = Color(0xFF00BFA5), label = "You")
             LegendItem(color = Color(0xFF2196F3), label = "Direct")
             LegendItem(color = Color(0xFFFF9800), label = "Relay")
-            LegendItem(color = Color(0xFF9E9E9E), label = "Offline")
+            LegendItem(color = Color(0xFFE53935), label = "Inactive")
         }
 
         // Graph canvas
@@ -244,7 +251,7 @@ private fun NetworkCanvas(
     val selfColor = Color(0xFF00BFA5)
     val directColor = Color(0xFF2196F3)
     val relayColor = Color(0xFFFF9800)
-    val offlineColor = Color(0xFF9E9E9E)
+    val inactiveColor = Color(0xFFE53935)
     val edgeColor = Color(0xFF546E7A)
     val edgeActiveColor = Color(0xFF00BFA5)
     val textMeasurer = rememberTextMeasurer()
@@ -321,10 +328,10 @@ private fun NetworkCanvas(
             val nodeRadius = if (node.isSelf) 24f * scale else 16f * scale
             val color = when {
                 node.isSelf -> selfColor
-                !node.isConnected -> offlineColor
+                !node.isConnected -> inactiveColor
                 node.isDirect -> directColor
                 node.hopCount > 0 -> relayColor
-                else -> offlineColor
+                else -> inactiveColor
             }
 
             // Active pulse ring for connected nodes only

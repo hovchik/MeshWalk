@@ -17,7 +17,8 @@ data class AppSettings(
     val autoStartMesh: Boolean = true,
     val maxRelayHops: Int = 7,
     val groupMessageHistoryCount: Int = 50,
-    val fingerprintLockEnabled: Boolean = false
+    val fingerprintLockEnabled: Boolean = false,
+    val networkGraphRefreshSeconds: Int = 5
 )
 
 /**

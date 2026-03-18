@@ -459,6 +459,7 @@ class SettingsRepositoryImpl @Inject constructor(
         private val GROUP_MESSAGE_HISTORY_COUNT = intPreferencesKey("group_message_history_count")
         private val ONBOARDING_DONE = booleanPreferencesKey("onboarding_done")
         private val FINGERPRINT_LOCK_ENABLED = booleanPreferencesKey("fingerprint_lock_enabled")
+        private val NETWORK_GRAPH_REFRESH_SECONDS = intPreferencesKey("network_graph_refresh_seconds")
     }
 
     override fun observeSettings(): Flow<AppSettings> {
@@ -482,6 +483,7 @@ class SettingsRepositoryImpl @Inject constructor(
             prefs[SHOW_ENCRYPTION_BADGE] = settings.showEncryptionBadge
             prefs[GROUP_MESSAGE_HISTORY_COUNT] = settings.groupMessageHistoryCount
             prefs[FINGERPRINT_LOCK_ENABLED] = settings.fingerprintLockEnabled
+            prefs[NETWORK_GRAPH_REFRESH_SECONDS] = settings.networkGraphRefreshSeconds
         }
     }
 
@@ -508,6 +510,7 @@ class SettingsRepositoryImpl @Inject constructor(
         showHopCount = this[SHOW_HOP_COUNT] ?: false,
         showEncryptionBadge = this[SHOW_ENCRYPTION_BADGE] ?: true,
         groupMessageHistoryCount = this[GROUP_MESSAGE_HISTORY_COUNT] ?: 50,
-        fingerprintLockEnabled = this[FINGERPRINT_LOCK_ENABLED] ?: false
+        fingerprintLockEnabled = this[FINGERPRINT_LOCK_ENABLED] ?: false,
+        networkGraphRefreshSeconds = this[NETWORK_GRAPH_REFRESH_SECONDS] ?: 5
     )
 }

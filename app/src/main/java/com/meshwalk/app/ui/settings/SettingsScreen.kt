@@ -175,6 +175,45 @@ fun SettingsScreen(
             checked = state.settings.showEncryptionBadge,
             onToggle = { viewModel.updateSettings { it.copy(showEncryptionBadge = !it.showEncryptionBadge) } }
         )
+        ListItem(
+            headlineContent = { Text("Network graph refresh") },
+            supportingContent = {
+                Text("Refresh every ${state.settings.networkGraphRefreshSeconds}s")
+            },
+            trailingContent = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    FilledTonalIconButton(
+                        onClick = {
+                            val current = state.settings.networkGraphRefreshSeconds
+                            if (current > 1) {
+                                viewModel.updateSettings { it.copy(networkGraphRefreshSeconds = current - 1) }
+                            }
+                        },
+                        enabled = state.settings.networkGraphRefreshSeconds > 1
+                    ) {
+                        Icon(Icons.Filled.Remove, "Decrease")
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "${state.settings.networkGraphRefreshSeconds}s",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    FilledTonalIconButton(
+                        onClick = {
+                            val current = state.settings.networkGraphRefreshSeconds
+                            if (current < 30) {
+                                viewModel.updateSettings { it.copy(networkGraphRefreshSeconds = current + 1) }
+                            }
+                        },
+                        enabled = state.settings.networkGraphRefreshSeconds < 30
+                    ) {
+                        Icon(Icons.Filled.Add, "Increase")
+                    }
+                }
+            }
+        )
         HorizontalDivider()
 
         // Groups
