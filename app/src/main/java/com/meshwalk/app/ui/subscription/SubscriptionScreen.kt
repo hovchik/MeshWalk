@@ -43,6 +43,7 @@ class SubscriptionViewModel @Inject constructor(
         val selectedPlanId: String? = null,
         val isPurchasing: Boolean = false,
         val isRestoring: Boolean = false,
+        val isLoading: Boolean = true,
         val message: String? = null
     )
 
@@ -53,6 +54,7 @@ class SubscriptionViewModel @Inject constructor(
         viewModelScope.launch {
             billingManager.initialize()
             billingManager.observeStateChanges(viewModelScope)
+            _state.update { it.copy(isLoading = false) }
         }
 
         viewModelScope.launch {
@@ -63,7 +65,12 @@ class SubscriptionViewModel @Inject constructor(
 
         viewModelScope.launch {
             billingManager.availablePlans.collect { plans ->
-                _state.update { it.copy(availablePlans = plans) }
+                _state.update { current ->
+                    // Auto-select the annual plan (best value) if nothing selected yet
+                    val selectedId = current.selectedPlanId
+                        ?: plans.find { it.billingPeriod == BillingPeriod.ANNUAL }?.productId
+                    current.copy(availablePlans = plans, selectedPlanId = selectedId)
+                }
             }
         }
     }
@@ -179,13 +186,38 @@ fun SubscriptionScreen(
                 )
                 Spacer(modifier = Modifier.height(12.dp))
 
-                state.availablePlans.forEach { plan ->
-                    PlanCard(
-                        plan = plan,
-                        isSelected = state.selectedPlanId == plan.productId,
-                        onClick = { viewModel.selectPlan(plan.productId) }
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
+                if (state.isLoading) {
+                    // Loading placeholder
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(200.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(32.dp),
+                                strokeWidth = 3.dp
+                            )
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Text(
+                                "Loading plans...",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                } else {
+                    state.availablePlans.forEach { plan ->
+                        val isRecommended = plan.billingPeriod == BillingPeriod.ANNUAL
+                        PlanCard(
+                            plan = plan,
+                            isSelected = state.selectedPlanId == plan.productId,
+                            isRecommended = isRecommended,
+                            onClick = { viewModel.selectPlan(plan.productId) }
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                    }
                 }
 
                 Spacer(modifier = Modifier.height(16.dp))
@@ -198,7 +230,8 @@ fun SubscriptionScreen(
                     state.isPurchasing -> "Processing..."
                     selectedPlan?.hasFreeTrial == true ->
                         "Start ${selectedPlan.freeTrialDays}-Day Free Trial"
-                    else -> "Subscribe Now"
+                    selectedPlan != null -> "Subscribe Now"
+                    else -> "Select a plan"
                 }
 
                 Button(
@@ -210,7 +243,7 @@ fun SubscriptionScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(52.dp),
-                    enabled = state.selectedPlanId != null && !state.isPurchasing
+                    enabled = state.selectedPlanId != null && !state.isPurchasing && !state.isLoading
                 ) {
                     if (state.isPurchasing) {
                         CircularProgressIndicator(
@@ -444,108 +477,148 @@ private fun FeatureRow(
 private fun PlanCard(
     plan: PlanDetails,
     isSelected: Boolean,
+    isRecommended: Boolean,
     onClick: () -> Unit
 ) {
-    val borderColor = if (isSelected) MaterialTheme.colorScheme.primary
-    else MaterialTheme.colorScheme.outlineVariant
-    val containerColor = if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
-    else MaterialTheme.colorScheme.surface
+    val borderColor = when {
+        isSelected -> MaterialTheme.colorScheme.primary
+        isRecommended -> MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)
+        else -> MaterialTheme.colorScheme.outlineVariant
+    }
+    val containerColor = when {
+        isSelected -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
+        isRecommended -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.1f)
+        else -> MaterialTheme.colorScheme.surface
+    }
 
-    val isRecommended = plan.billingPeriod == BillingPeriod.ANNUAL
-
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .border(
-                width = if (isSelected) 2.dp else 1.dp,
-                color = borderColor,
-                shape = RoundedCornerShape(12.dp)
-            )
-            .clip(RoundedCornerShape(12.dp))
-            .clickable(onClick = onClick),
-        colors = CardDefaults.cardColors(containerColor = containerColor),
-        shape = RoundedCornerShape(12.dp)
-    ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
+    Column(modifier = Modifier.fillMaxWidth()) {
+        // "Recommended" ribbon above the card
+        if (isRecommended) {
+            Surface(
+                shape = RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp),
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.fillMaxWidth()
             ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "RECOMMENDED",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onPrimary,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 4.dp)
+                )
+            }
+        }
+
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .border(
+                    width = if (isSelected || isRecommended) 2.dp else 1.dp,
+                    color = borderColor,
+                    shape = if (isRecommended)
+                        RoundedCornerShape(bottomStart = 12.dp, bottomEnd = 12.dp)
+                    else RoundedCornerShape(12.dp)
+                )
+                .clip(
+                    if (isRecommended)
+                        RoundedCornerShape(bottomStart = 12.dp, bottomEnd = 12.dp)
+                    else RoundedCornerShape(12.dp)
+                )
+                .clickable(onClick = onClick),
+            colors = CardDefaults.cardColors(containerColor = containerColor),
+            shape = if (isRecommended)
+                RoundedCornerShape(bottomStart = 12.dp, bottomEnd = 12.dp)
+            else RoundedCornerShape(12.dp)
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.Top,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
                         Text(
                             plan.name,
                             style = MaterialTheme.typography.titleSmall,
                             fontWeight = FontWeight.SemiBold
                         )
-                        if (plan.hasFreeTrial) {
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Surface(
-                                shape = RoundedCornerShape(4.dp),
-                                color = MaterialTheme.colorScheme.tertiary
-                            ) {
-                                Text(
-                                    "${plan.freeTrialDays}-DAY TRIAL",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onTertiary,
-                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        // Badges on their own row to prevent overflow
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            if (plan.hasFreeTrial) {
+                                Surface(
+                                    shape = RoundedCornerShape(4.dp),
+                                    color = MaterialTheme.colorScheme.tertiary
+                                ) {
+                                    Text(
+                                        "${plan.freeTrialDays}-DAY FREE TRIAL",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onTertiary,
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                    )
+                                }
+                            }
+                            if (isRecommended) {
+                                Surface(
+                                    shape = RoundedCornerShape(4.dp),
+                                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
+                                ) {
+                                    Text(
+                                        "SAVE 37%",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.primary,
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                    )
+                                }
                             }
                         }
-                        if (isRecommended) {
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Surface(
-                                shape = RoundedCornerShape(4.dp),
-                                color = MaterialTheme.colorScheme.primary
-                            ) {
-                                Text(
-                                    "BEST VALUE",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onPrimary,
-                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                )
-                            }
-                        }
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            plan.description,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
-                    Spacer(modifier = Modifier.height(2.dp))
-                    Text(
-                        plan.description,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+
+                    Spacer(modifier = Modifier.width(12.dp))
+
+                    Column(horizontalAlignment = Alignment.End) {
+                        Text(
+                            plan.formattedPrice,
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Text(
+                            "/${plan.billingPeriod.label}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
 
-                Column(horizontalAlignment = Alignment.End) {
-                    Text(
-                        plan.formattedPrice,
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                    Text(
-                        "/${plan.billingPeriod.label}",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-
-            if (isSelected) {
-                Spacer(modifier = Modifier.height(8.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        Icons.Filled.CheckCircle,
-                        contentDescription = null,
-                        modifier = Modifier.size(16.dp),
-                        tint = MaterialTheme.colorScheme.primary
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(
-                        "Selected",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary
-                    )
+                if (isSelected) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            Icons.Filled.CheckCircle,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp),
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            "Selected",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
                 }
             }
         }
