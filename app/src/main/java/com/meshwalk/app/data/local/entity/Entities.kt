@@ -118,3 +118,10 @@ data class SenderKeyEntity(
     }
     override fun hashCode(): Int = 31 * groupId.hashCode() + senderNodeId.hashCode()
 }
+
+@Entity(tableName = "blocked_peers")
+data class BlockedPeerEntity(
+    @PrimaryKey val nodeId: String,
+    val displayName: String?,
+    val blockedAt: Long
+)

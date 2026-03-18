@@ -16,6 +16,7 @@ import androidx.lifecycle.viewModelScope
 import com.meshwalk.app.domain.model.ConnectionType
 import com.meshwalk.app.domain.model.IdentityType
 import com.meshwalk.app.domain.model.PeerNode
+import com.meshwalk.app.domain.repository.BlockedPeer
 import com.meshwalk.app.domain.repository.ConversationRepository
 import com.meshwalk.app.domain.repository.PeerRepository
 import com.meshwalk.app.util.TimeUtils
@@ -32,6 +33,9 @@ class PeersViewModel @Inject constructor(
 ) : ViewModel() {
 
     val peers: StateFlow<List<PeerNode>> = peerRepo.observeNearbyPeers()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val blockedPeers: StateFlow<List<BlockedPeer>> = peerRepo.observeBlockedPeers()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     private val _isScanning = MutableStateFlow(false)
@@ -56,6 +60,24 @@ class PeersViewModel @Inject constructor(
             }
         }
     }
+
+    fun removePeer(nodeId: String) {
+        viewModelScope.launch {
+            peerRepo.removePeer(nodeId)
+        }
+    }
+
+    fun blockPeer(nodeId: String, displayName: String?) {
+        viewModelScope.launch {
+            peerRepo.blockPeer(nodeId, displayName)
+        }
+    }
+
+    fun unblockPeer(nodeId: String) {
+        viewModelScope.launch {
+            peerRepo.unblockPeer(nodeId)
+        }
+    }
 }
 
 @Composable
@@ -64,9 +86,53 @@ fun PeersScreen(
     viewModel: PeersViewModel = hiltViewModel()
 ) {
     val peers by viewModel.peers.collectAsState()
+    val blockedPeers by viewModel.blockedPeers.collectAsState()
     val isScanning by viewModel.isScanning.collectAsState()
 
-    if (peers.isEmpty()) {
+    // Confirmation dialog state
+    var confirmAction by remember { mutableStateOf<PeerAction?>(null) }
+
+    if (confirmAction != null) {
+        val action = confirmAction!!
+        AlertDialog(
+            onDismissRequest = { confirmAction = null },
+            title = {
+                Text(if (action is PeerAction.Block) "Block Peer" else "Remove Peer")
+            },
+            text = {
+                val name = action.displayName ?: action.nodeId.take(8)
+                Text(
+                    if (action is PeerAction.Block)
+                        "Block $name? You won't receive messages from them and they won't appear in your peer list."
+                    else
+                        "Remove $name from your peer list? They may reappear on the next scan."
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        when (action) {
+                            is PeerAction.Block -> viewModel.blockPeer(action.nodeId, action.displayName)
+                            is PeerAction.Remove -> viewModel.removePeer(action.nodeId)
+                        }
+                        confirmAction = null
+                    },
+                    colors = ButtonDefaults.textButtonColors(
+                        contentColor = MaterialTheme.colorScheme.error
+                    )
+                ) {
+                    Text(if (action is PeerAction.Block) "Block" else "Remove")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmAction = null }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    if (peers.isEmpty() && blockedPeers.isEmpty()) {
         Box(
             modifier = Modifier.fillMaxSize(),
             contentAlignment = Alignment.Center
@@ -156,9 +222,12 @@ fun PeersScreen(
                         )
                     }
                     items(directPeers, key = { it.nodeId }) { peer ->
-                        PeerItem(peer = peer, onChat = {
-                            viewModel.startChat(peer.nodeId, peer.displayName, onStartChat)
-                        })
+                        PeerItem(
+                            peer = peer,
+                            onChat = { viewModel.startChat(peer.nodeId, peer.displayName, onStartChat) },
+                            onRemove = { confirmAction = PeerAction.Remove(peer.nodeId, peer.displayName) },
+                            onBlock = { confirmAction = PeerAction.Block(peer.nodeId, peer.displayName) }
+                        )
                     }
                 }
 
@@ -172,9 +241,29 @@ fun PeersScreen(
                         )
                     }
                     items(relayPeers, key = { it.nodeId }) { peer ->
-                        PeerItem(peer = peer, onChat = {
-                            viewModel.startChat(peer.nodeId, peer.displayName, onStartChat)
-                        })
+                        PeerItem(
+                            peer = peer,
+                            onChat = { viewModel.startChat(peer.nodeId, peer.displayName, onStartChat) },
+                            onRemove = { confirmAction = PeerAction.Remove(peer.nodeId, peer.displayName) },
+                            onBlock = { confirmAction = PeerAction.Block(peer.nodeId, peer.displayName) }
+                        )
+                    }
+                }
+
+                if (blockedPeers.isNotEmpty()) {
+                    item {
+                        Text(
+                            "Blocked (${blockedPeers.size})",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                        )
+                    }
+                    items(blockedPeers, key = { it.nodeId }) { blocked ->
+                        BlockedPeerItem(
+                            blockedPeer = blocked,
+                            onUnblock = { viewModel.unblockPeer(blocked.nodeId) }
+                        )
                     }
                 }
             }
@@ -184,7 +273,14 @@ fun PeersScreen(
 }
 
 @Composable
-private fun PeerItem(peer: PeerNode, onChat: () -> Unit) {
+private fun PeerItem(
+    peer: PeerNode,
+    onChat: () -> Unit,
+    onRemove: () -> Unit,
+    onBlock: () -> Unit
+) {
+    var menuExpanded by remember { mutableStateOf(false) }
+
     ListItem(
         headlineContent = {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -232,9 +328,87 @@ private fun PeerItem(peer: PeerNode, onChat: () -> Unit) {
             )
         },
         trailingContent = {
-            FilledTonalIconButton(onClick = onChat) {
-                Icon(Icons.Filled.Chat, "Start chat")
+            Row {
+                FilledTonalIconButton(onClick = onChat) {
+                    Icon(Icons.Filled.Chat, "Start chat")
+                }
+                Box {
+                    IconButton(onClick = { menuExpanded = true }) {
+                        Icon(Icons.Filled.MoreVert, "More options")
+                    }
+                    DropdownMenu(
+                        expanded = menuExpanded,
+                        onDismissRequest = { menuExpanded = false }
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("Remove") },
+                            onClick = {
+                                menuExpanded = false
+                                onRemove()
+                            },
+                            leadingIcon = {
+                                Icon(Icons.Filled.PersonRemove, contentDescription = null)
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Block") },
+                            onClick = {
+                                menuExpanded = false
+                                onBlock()
+                            },
+                            leadingIcon = {
+                                Icon(
+                                    Icons.Filled.Block,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.error
+                                )
+                            }
+                        )
+                    }
+                }
             }
         }
     )
+}
+
+@Composable
+private fun BlockedPeerItem(
+    blockedPeer: BlockedPeer,
+    onUnblock: () -> Unit
+) {
+    ListItem(
+        headlineContent = {
+            Text(
+                blockedPeer.displayName ?: blockedPeer.nodeId.take(8),
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        },
+        supportingContent = {
+            Text(
+                text = "Blocked ${TimeUtils.formatTimestamp(blockedPeer.blockedAt)}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.outline
+            )
+        },
+        leadingContent = {
+            Icon(
+                Icons.Filled.Block,
+                contentDescription = null,
+                modifier = Modifier.size(40.dp),
+                tint = MaterialTheme.colorScheme.error.copy(alpha = 0.6f)
+            )
+        },
+        trailingContent = {
+            OutlinedButton(onClick = onUnblock) {
+                Text("Unblock")
+            }
+        }
+    )
+}
+
+private sealed interface PeerAction {
+    val nodeId: String
+    val displayName: String?
+    data class Remove(override val nodeId: String, override val displayName: String?) : PeerAction
+    data class Block(override val nodeId: String, override val displayName: String?) : PeerAction
 }

@@ -56,6 +56,12 @@ class MeshInbox @Inject constructor(
         scope.launch {
             routingEngine.incomingPackets.collect { packet ->
                 try {
+                    // Silently drop packets from blocked peers.
+                    if (peerRepo.isBlocked(packet.sourceNodeId)) {
+                        Timber.d("Dropping packet from blocked peer ${packet.sourceNodeId.take(8)}")
+                        return@collect
+                    }
+
                     when (packet.packetType) {
                         PacketType.GROUP_CONTROL -> {
                             groupControlManager.handleGroupControl(packet)
