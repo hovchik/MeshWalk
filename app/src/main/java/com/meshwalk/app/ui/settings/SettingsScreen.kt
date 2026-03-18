@@ -20,9 +20,13 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.compose.foundation.shape.RoundedCornerShape
 import com.meshwalk.app.billing.BillingManager
 import com.meshwalk.app.billing.FeatureGate
 import com.meshwalk.app.billing.SubscriptionState
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import com.meshwalk.app.domain.model.*
 import com.meshwalk.app.domain.repository.GroupRepository
 import com.meshwalk.app.domain.repository.IdentityRepository
@@ -115,9 +119,10 @@ fun SettingsScreen(
     ) {
         // Subscription section
         SectionHeader("Subscription")
-        SubscriptionStatusItem(
+        SubscriptionInfoCard(
             subscriptionState = state.subscriptionState,
-            onClick = onSubscription
+            featureGate = viewModel.featureGate,
+            onManage = onSubscription
         )
         HorizontalDivider()
 
@@ -611,64 +616,222 @@ private fun IdentityTypeOption(
 }
 
 @Composable
-private fun SubscriptionStatusItem(
+private fun SubscriptionInfoCard(
     subscriptionState: SubscriptionState,
-    onClick: () -> Unit
+    featureGate: FeatureGate,
+    onManage: () -> Unit
 ) {
-    ListItem(
-        modifier = Modifier.clickable(onClick = onClick),
-        headlineContent = {
-            if (subscriptionState.isActive) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(if (subscriptionState.isFreeTrial) "Free Trial" else "MeshWalk Pro")
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Surface(
-                        shape = MaterialTheme.shapes.extraSmall,
-                        color = if (subscriptionState.isFreeTrial)
-                            MaterialTheme.colorScheme.tertiary
-                        else MaterialTheme.colorScheme.primary
-                    ) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = if (subscriptionState.isActive)
+                MaterialTheme.colorScheme.surfaceVariant
+            else MaterialTheme.colorScheme.surface
+        ),
+        shape = RoundedCornerShape(16.dp)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            // Header: plan name + status badge
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(
+                    when {
+                        subscriptionState.isFreeTrial -> Icons.Filled.Timer
+                        subscriptionState.isActive -> Icons.Filled.Verified
+                        else -> Icons.Filled.WorkspacePremium
+                    },
+                    contentDescription = null,
+                    modifier = Modifier.size(32.dp),
+                    tint = when {
+                        subscriptionState.isFreeTrial -> MaterialTheme.colorScheme.tertiary
+                        subscriptionState.isActive -> MaterialTheme.colorScheme.primary
+                        else -> MaterialTheme.colorScheme.outline
+                    }
+                )
+                Spacer(modifier = Modifier.width(12.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            if (subscriptionState.isFreeTrial) "TRIAL" else "ACTIVE",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = if (subscriptionState.isFreeTrial)
-                                MaterialTheme.colorScheme.onTertiary
-                            else MaterialTheme.colorScheme.onPrimary,
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            when {
+                                subscriptionState.isFreeTrial -> "Free Trial"
+                                subscriptionState.isActive -> "MeshWalk Pro"
+                                else -> "Free Plan"
+                            },
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        if (subscriptionState.isActive) {
+                            Surface(
+                                shape = MaterialTheme.shapes.extraSmall,
+                                color = if (subscriptionState.isFreeTrial)
+                                    MaterialTheme.colorScheme.tertiary
+                                else MaterialTheme.colorScheme.primary
+                            ) {
+                                Text(
+                                    if (subscriptionState.isFreeTrial) "TRIAL" else "ACTIVE",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = if (subscriptionState.isFreeTrial)
+                                        MaterialTheme.colorScheme.onTertiary
+                                    else MaterialTheme.colorScheme.onPrimary,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                )
+                            }
+                        }
+                    }
+                    if (subscriptionState.isActive) {
+                        Text(
+                            subscriptionState.planName,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
-            } else {
-                Text("Upgrade to Pro")
             }
-        },
-        supportingContent = {
+
+            // Renewal / expiration info
+            if (subscriptionState.isActive && subscriptionState.expiresAt != null) {
+                Spacer(modifier = Modifier.height(12.dp))
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+                Spacer(modifier = Modifier.height(12.dp))
+
+                val daysLeft = ((subscriptionState.expiresAt - System.currentTimeMillis()) /
+                        (24 * 60 * 60 * 1000)).toInt().coerceAtLeast(0)
+                val dateFormat = remember { SimpleDateFormat("MMM d, yyyy", Locale.getDefault()) }
+                val expiryDate = remember(subscriptionState.expiresAt) {
+                    dateFormat.format(Date(subscriptionState.expiresAt))
+                }
+
+                SubscriptionDetailRow(
+                    icon = Icons.Filled.CalendarMonth,
+                    label = if (subscriptionState.isFreeTrial) "Trial ends" else "Renews on",
+                    value = expiryDate
+                )
+                SubscriptionDetailRow(
+                    icon = Icons.Filled.Schedule,
+                    label = "Days remaining",
+                    value = "$daysLeft days"
+                )
+            } else if (subscriptionState.isActive && subscriptionState.expiresAt == null) {
+                Spacer(modifier = Modifier.height(12.dp))
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+                Spacer(modifier = Modifier.height(12.dp))
+                SubscriptionDetailRow(
+                    icon = Icons.Filled.AllInclusive,
+                    label = "Duration",
+                    value = "Lifetime access"
+                )
+            }
+
+            // Feature limits
+            Spacer(modifier = Modifier.height(12.dp))
+            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+            Spacer(modifier = Modifier.height(12.dp))
+
             Text(
-                when {
-                    subscriptionState.isFreeTrial && subscriptionState.expiresAt != null -> {
-                        val daysLeft = ((subscriptionState.expiresAt - System.currentTimeMillis()) /
-                                (24 * 60 * 60 * 1000)).toInt()
-                        "$daysLeft days left in trial"
-                    }
-                    subscriptionState.isActive -> "Plan: ${subscriptionState.planName}"
-                    else -> "Try free for 7 days, then unlock all features"
-                }
+                "Your limits",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-        },
-        leadingContent = {
-            Icon(
-                if (subscriptionState.isFreeTrial) Icons.Filled.Timer
-                else Icons.Filled.WorkspacePremium,
-                contentDescription = null,
-                tint = when {
-                    subscriptionState.isFreeTrial -> MaterialTheme.colorScheme.tertiary
-                    subscriptionState.isActive -> MaterialTheme.colorScheme.primary
-                    else -> MaterialTheme.colorScheme.outline
-                }
+            Spacer(modifier = Modifier.height(8.dp))
+
+            SubscriptionDetailRow(
+                icon = Icons.Filled.Group,
+                label = "Max group size",
+                value = "${featureGate.maxGroupSize} members"
             )
-        },
-        trailingContent = { Icon(Icons.Filled.ChevronRight, null) }
-    )
+            SubscriptionDetailRow(
+                icon = Icons.Filled.Inbox,
+                label = "Message queue",
+                value = "${featureGate.maxQueueSize} messages"
+            )
+            SubscriptionDetailRow(
+                icon = Icons.Filled.History,
+                label = "Message retention",
+                value = "${featureGate.messageRetentionDays} days"
+            )
+            SubscriptionDetailRow(
+                icon = Icons.Filled.Speed,
+                label = "Priority relay",
+                value = if (featureGate.hasPriorityRelay) "Enabled" else "Standard"
+            )
+            SubscriptionDetailRow(
+                icon = Icons.Filled.Badge,
+                label = "Multiple identities",
+                value = if (featureGate.canCreateMultipleIdentities) "Enabled" else "Disabled"
+            )
+            SubscriptionDetailRow(
+                icon = Icons.Filled.BugReport,
+                label = "Diagnostics",
+                value = if (featureGate.canAccessDiagnostics) "Full access" else "Basic"
+            )
+            SubscriptionDetailRow(
+                icon = Icons.Filled.FileDownload,
+                label = "Chat export",
+                value = if (featureGate.canExportChat) "Available" else "Locked"
+            )
+
+            // Action button
+            Spacer(modifier = Modifier.height(16.dp))
+            if (subscriptionState.isActive) {
+                OutlinedButton(
+                    onClick = onManage,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(Icons.Filled.Settings, null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Manage Subscription")
+                }
+            } else {
+                Button(
+                    onClick = onManage,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(Icons.Filled.WorkspacePremium, null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Start 7-Day Free Trial")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SubscriptionDetailRow(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    value: String
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            icon,
+            contentDescription = null,
+            modifier = Modifier.size(18.dp),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(modifier = Modifier.width(10.dp))
+        Text(
+            label,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f)
+        )
+        Text(
+            value,
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.Medium,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+    }
 }
 
 @Composable
