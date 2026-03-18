@@ -252,6 +252,10 @@ class PeerRepositoryImpl @Inject constructor(
         peerDao.pruneStale(System.currentTimeMillis() - maxAgeMs)
     }
 
+    override suspend fun resetAllConnectionStates() {
+        peerDao.resetAllConnectionStates()
+    }
+
     override suspend fun isBlocked(nodeId: String): Boolean {
         return blockedPeerDao.isBlocked(nodeId)
     }

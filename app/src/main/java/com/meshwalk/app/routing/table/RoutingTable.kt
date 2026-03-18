@@ -143,13 +143,18 @@ class RoutingTable @Inject constructor(
         ))
 
         // Direct peers
+        val now = System.currentTimeMillis()
         directPeers.forEach { peer ->
+            // Cross-validate: a peer claiming isConnected but not seen recently
+            // is stale (e.g. app was killed before disconnect callback fired).
+            val actuallyConnected = peer.isConnected &&
+                (now - peer.lastSeen < RoutingEntry.STALE_THRESHOLD_MS)
             nodes.add(GraphNode(
                 nodeId = peer.nodeId,
                 displayName = peer.displayName,
                 identityType = peer.identityType,
                 isDirect = true,
-                isConnected = peer.isConnected,
+                isConnected = actuallyConnected,
                 hopCount = 0,
                 lastSeen = peer.lastSeen
             ))
@@ -158,7 +163,7 @@ class RoutingTable @Inject constructor(
                 toNodeId = peer.nodeId,
                 connectionType = peer.connectionType,
                 signalStrength = peer.signalStrength,
-                isActive = peer.isConnected
+                isActive = actuallyConnected
             ))
         }
 

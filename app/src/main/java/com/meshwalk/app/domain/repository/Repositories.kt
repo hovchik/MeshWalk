@@ -46,6 +46,7 @@ interface PeerRepository {
     suspend fun getPeer(nodeId: String): PeerNode?
     suspend fun getDirectPeers(): List<PeerNode>
     suspend fun pruneStale(maxAgeMs: Long)
+    suspend fun resetAllConnectionStates()
     suspend fun isBlocked(nodeId: String): Boolean
     suspend fun blockPeer(nodeId: String, displayName: String?)
     suspend fun unblockPeer(nodeId: String)

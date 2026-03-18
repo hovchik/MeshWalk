@@ -55,6 +55,10 @@ class NetworkGraphViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
+            // Reset stale connection states left over from a previous session
+            // (e.g. app was killed before disconnect callbacks could fire).
+            peerRepo.resetAllConnectionStates()
+
             val identity = identityRepo.getActiveIdentity()
             val selfId = identity?.nodeId ?: ""
 
@@ -86,20 +90,24 @@ class NetworkGraphViewModel @Inject constructor(
 
     private fun rebuildGraph(selfId: String, peers: List<PeerNode>) {
         val showActive = _state.value.showOnlyActive
-        val filteredPeers = if (showActive) {
-            peers.filter { it.isConnected }
-        } else {
-            peers
+        val now = System.currentTimeMillis()
+
+        // Cross-validate: peer must both claim isConnected AND have been seen
+        // recently to be considered truly active.
+        val trulyActivePeers = peers.filter {
+            it.isConnected && (now - it.lastSeen < RoutingEntry.STALE_THRESHOLD_MS)
         }
+
+        val filteredPeers = if (showActive) trulyActivePeers else peers
 
         val graph = routingTable.buildNetworkGraph(selfId, filteredPeers, activeOnly = showActive)
         _state.value = _state.value.copy(
             graph = graph,
             selfNodeId = selfId,
             peerCount = peers.size,
-            activePeerCount = peers.count { it.isConnected },
+            activePeerCount = trulyActivePeers.size,
             routeCount = routingTable.size(),
-            lastUpdated = System.currentTimeMillis()
+            lastUpdated = now
         )
     }
 
