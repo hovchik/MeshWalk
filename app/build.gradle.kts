@@ -68,4 +68,5 @@ dependencies {
     ksp(libs.room.compiler)
     implementation(libs.play.services.nearby)
     implementation(libs.androidx.biometric)
+    implementation(libs.play.billing)
 }

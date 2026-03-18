@@ -27,6 +27,7 @@ import com.meshwalk.app.domain.repository.GroupRepository
 import com.meshwalk.app.domain.repository.IdentityRepository
 import com.meshwalk.app.domain.repository.MessageRepository
 import com.meshwalk.app.domain.repository.PeerRepository
+import com.meshwalk.app.billing.FeatureGate
 import com.meshwalk.app.domain.usecase.CreateGroupUseCase
 import com.meshwalk.app.mesh.group.GroupControlManager
 import com.meshwalk.app.util.TimeUtils
@@ -43,7 +44,8 @@ class GroupListViewModel @Inject constructor(
     private val conversationRepo: ConversationRepository,
     private val messageRepo: MessageRepository,
     private val createGroup: CreateGroupUseCase,
-    private val groupControlManager: GroupControlManager
+    private val groupControlManager: GroupControlManager,
+    val featureGate: FeatureGate
 ) : ViewModel() {
 
     data class GroupWithConversation(
@@ -252,6 +254,8 @@ fun GroupListScreen(
         if (showCreateDialog) {
             CreateGroupDialog(
                 availablePeers = viewModel.availablePeers.collectAsState().value,
+                maxMembers = viewModel.featureGate.maxGroupSize,
+                isPremium = viewModel.featureGate.isPremium,
                 onDismiss = { showCreateDialog = false },
                 onCreate = { name, members, temp ->
                     viewModel.createNewGroup(name, members, temp)
@@ -387,12 +391,18 @@ private fun GroupItem(
 @Composable
 private fun CreateGroupDialog(
     availablePeers: List<PeerNode>,
+    maxMembers: Int,
+    isPremium: Boolean,
     onDismiss: () -> Unit,
     onCreate: (name: String, memberIds: List<String>, temporary: Boolean) -> Unit
 ) {
     var name by remember { mutableStateOf("") }
     var isTemporary by remember { mutableStateOf(false) }
     val selectedPeers = remember { mutableStateListOf<String>() }
+
+    // Account for the creator being a member (maxMembers includes self)
+    val maxSelectable = maxMembers - 1
+    val atLimit = selectedPeers.size >= maxSelectable
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -415,26 +425,53 @@ private fun CreateGroupDialog(
                     Switch(checked = isTemporary, onCheckedChange = { isTemporary = it })
                 }
                 Spacer(modifier = Modifier.height(12.dp))
-                Text("Select members:", style = MaterialTheme.typography.labelMedium)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Select members:", style = MaterialTheme.typography.labelMedium)
+                    Text(
+                        "${selectedPeers.size}/$maxSelectable",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (atLimit) MaterialTheme.colorScheme.error
+                        else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                if (atLimit && !isPremium) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        "Upgrade to Pro for groups up to 50 members",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
                 availablePeers.forEach { peer ->
+                    val isSelected = peer.nodeId in selectedPeers
+                    val canSelect = isSelected || !atLimit
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clickable {
-                                if (peer.nodeId in selectedPeers) selectedPeers.remove(peer.nodeId)
-                                else selectedPeers.add(peer.nodeId)
+                            .clickable(enabled = canSelect) {
+                                if (isSelected) selectedPeers.remove(peer.nodeId)
+                                else if (!atLimit) selectedPeers.add(peer.nodeId)
                             }
                             .padding(vertical = 4.dp)
                     ) {
                         Checkbox(
-                            checked = peer.nodeId in selectedPeers,
-                            onCheckedChange = {
-                                if (it) selectedPeers.add(peer.nodeId)
+                            checked = isSelected,
+                            onCheckedChange = { checked ->
+                                if (checked && !atLimit) selectedPeers.add(peer.nodeId)
                                 else selectedPeers.remove(peer.nodeId)
-                            }
+                            },
+                            enabled = canSelect
                         )
-                        Text(peer.displayName ?: peer.nodeId.take(8))
+                        Text(
+                            peer.displayName ?: peer.nodeId.take(8),
+                            color = if (canSelect) MaterialTheme.colorScheme.onSurface
+                            else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                        )
                     }
                 }
             }

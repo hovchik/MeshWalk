@@ -15,6 +15,7 @@ datastore = "1.1.1"
 room = "2.6.1"
 playServicesNearby = "19.3.0"
 biometric = "1.1.0"
+playBilling = "7.0.0"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -37,6 +38,7 @@ room-ktx = { group = "androidx.room", name = "room-ktx", version.ref = "room" }
 room-compiler = { group = "androidx.room", name = "room-compiler", version.ref = "room" }
 play-services-nearby = { group = "com.google.android.gms", name = "play-services-nearby", version.ref = "playServicesNearby" }
 androidx-biometric = { group = "androidx.biometric", name = "biometric", version.ref = "biometric" }
+play-billing = { group = "com.android.billingclient", name = "billing-ktx", version.ref = "playBilling" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

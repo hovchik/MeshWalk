@@ -20,6 +20,15 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.compose.foundation.shape.RoundedCornerShape
+import com.meshwalk.app.billing.BillingManager
+import com.meshwalk.app.billing.BillingPeriod
+import com.meshwalk.app.billing.FeatureGate
+import com.meshwalk.app.billing.PlanDetails
+import com.meshwalk.app.billing.SubscriptionState
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import com.meshwalk.app.domain.model.*
 import com.meshwalk.app.domain.repository.GroupRepository
 import com.meshwalk.app.domain.repository.IdentityRepository
@@ -35,13 +44,17 @@ class SettingsViewModel @Inject constructor(
     private val settingsRepo: SettingsRepository,
     private val identityRepo: IdentityRepository,
     private val groupRepo: GroupRepository,
-    private val transportManager: TransportManagerPort
+    private val transportManager: TransportManagerPort,
+    val featureGate: FeatureGate,
+    private val billingManager: BillingManager
 ) : ViewModel() {
 
     data class UiState(
         val settings: AppSettings = AppSettings(),
         val identity: NodeIdentity? = null,
-        val isScanning: Boolean = false
+        val isScanning: Boolean = false,
+        val subscriptionState: SubscriptionState = SubscriptionState(),
+        val availablePlans: List<PlanDetails> = emptyList()
     )
 
     private val _state = MutableStateFlow(UiState())
@@ -52,9 +65,17 @@ class SettingsViewModel @Inject constructor(
             combine(
                 settingsRepo.observeSettings(),
                 identityRepo.observeActiveIdentity(),
-                transportManager.isScanning
-            ) { settings, identity, scanning ->
-                UiState(settings = settings, identity = identity, isScanning = scanning)
+                transportManager.isScanning,
+                featureGate.subscriptionState,
+                billingManager.availablePlans
+            ) { settings, identity, scanning, subscription, plans ->
+                UiState(
+                    settings = settings,
+                    identity = identity,
+                    isScanning = scanning,
+                    subscriptionState = subscription,
+                    availablePlans = plans
+                )
             }.collect { _state.value = it }
         }
     }
@@ -93,6 +114,7 @@ class SettingsViewModel @Inject constructor(
 @Composable
 fun SettingsScreen(
     onDiagnostics: () -> Unit,
+    onSubscription: () -> Unit = {},
     viewModel: SettingsViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsState()
@@ -101,6 +123,16 @@ fun SettingsScreen(
     Column(
         modifier = Modifier.verticalScroll(rememberScrollState())
     ) {
+        // Subscription section
+        SectionHeader("Subscription")
+        SubscriptionInfoCard(
+            subscriptionState = state.subscriptionState,
+            featureGate = viewModel.featureGate,
+            availablePlans = state.availablePlans,
+            onManage = onSubscription
+        )
+        HorizontalDivider()
+
         // Profile section
         SectionHeader("Profile")
         state.identity?.let { identity ->
@@ -314,12 +346,43 @@ fun SettingsScreen(
 
         // Debug
         SectionHeader("Debug")
+        val canAccessDiagnostics = viewModel.featureGate.canAccessDiagnostics
         ListItem(
-            modifier = Modifier.clickable(onClick = onDiagnostics),
-            headlineContent = { Text("Mesh Diagnostics") },
-            supportingContent = { Text("View routing tables, queues, and transport state") },
+            modifier = Modifier.clickable(onClick = {
+                if (canAccessDiagnostics) onDiagnostics() else onSubscription()
+            }),
+            headlineContent = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Mesh Diagnostics")
+                    if (!canAccessDiagnostics) {
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Surface(
+                            shape = MaterialTheme.shapes.extraSmall,
+                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
+                        ) {
+                            Text(
+                                "PRO",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+                }
+            },
+            supportingContent = {
+                Text(
+                    if (canAccessDiagnostics) "View routing tables, queues, and transport state"
+                    else "Upgrade to Pro for full diagnostics access"
+                )
+            },
             leadingContent = { Icon(Icons.Filled.BugReport, null) },
-            trailingContent = { Icon(Icons.Filled.ChevronRight, null) }
+            trailingContent = {
+                Icon(
+                    if (canAccessDiagnostics) Icons.Filled.ChevronRight else Icons.Filled.Lock,
+                    null
+                )
+            }
         )
 
         Spacer(modifier = Modifier.height(32.dp))
@@ -557,6 +620,240 @@ private fun IdentityTypeOption(
             RadioButton(selected = selected, onClick = onClick)
         }
     )
+}
+
+@Composable
+private fun SubscriptionInfoCard(
+    subscriptionState: SubscriptionState,
+    featureGate: FeatureGate,
+    availablePlans: List<PlanDetails>,
+    onManage: () -> Unit
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = if (subscriptionState.isActive)
+                MaterialTheme.colorScheme.surfaceVariant
+            else MaterialTheme.colorScheme.surface
+        ),
+        shape = RoundedCornerShape(16.dp)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            // Header: plan icon + name + status badge
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(
+                    when {
+                        subscriptionState.isFreeTrial -> Icons.Filled.Timer
+                        subscriptionState.isActive -> Icons.Filled.Verified
+                        else -> Icons.Filled.WorkspacePremium
+                    },
+                    contentDescription = null,
+                    modifier = Modifier.size(32.dp),
+                    tint = when {
+                        subscriptionState.isFreeTrial -> MaterialTheme.colorScheme.tertiary
+                        subscriptionState.isActive -> MaterialTheme.colorScheme.primary
+                        else -> MaterialTheme.colorScheme.outline
+                    }
+                )
+                Spacer(modifier = Modifier.width(12.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            when {
+                                subscriptionState.isFreeTrial -> "Free Trial"
+                                subscriptionState.isActive -> "MeshWalk Pro"
+                                else -> "Free Plan"
+                            },
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        if (subscriptionState.isActive) {
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Surface(
+                                shape = MaterialTheme.shapes.extraSmall,
+                                color = if (subscriptionState.isFreeTrial)
+                                    MaterialTheme.colorScheme.tertiary
+                                else MaterialTheme.colorScheme.primary
+                            ) {
+                                Text(
+                                    if (subscriptionState.isFreeTrial) "TRIAL" else "ACTIVE",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = if (subscriptionState.isFreeTrial)
+                                        MaterialTheme.colorScheme.onTertiary
+                                    else MaterialTheme.colorScheme.onPrimary,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                )
+                            }
+                        }
+                    }
+                    Text(
+                        when {
+                            subscriptionState.isActive -> subscriptionState.planName
+                            else -> "Groups up to ${featureGate.maxGroupSize}, ${featureGate.maxQueueSize}-msg queue"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            // Renewal / expiration info for active subscriptions
+            if (subscriptionState.isActive && subscriptionState.expiresAt != null) {
+                Spacer(modifier = Modifier.height(12.dp))
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+                Spacer(modifier = Modifier.height(12.dp))
+
+                val daysLeft = ((subscriptionState.expiresAt - System.currentTimeMillis()) /
+                        (24 * 60 * 60 * 1000)).toInt().coerceAtLeast(0)
+                val dateFormat = remember { SimpleDateFormat("MMM d, yyyy", Locale.getDefault()) }
+                val expiryDate = remember(subscriptionState.expiresAt) {
+                    dateFormat.format(Date(subscriptionState.expiresAt))
+                }
+
+                SubscriptionDetailRow(
+                    icon = Icons.Filled.CalendarMonth,
+                    label = if (subscriptionState.isFreeTrial) "Trial ends" else "Renews on",
+                    value = expiryDate
+                )
+                SubscriptionDetailRow(
+                    icon = Icons.Filled.Schedule,
+                    label = "Days remaining",
+                    value = "$daysLeft days"
+                )
+            } else if (subscriptionState.isActive && subscriptionState.expiresAt == null) {
+                Spacer(modifier = Modifier.height(12.dp))
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+                Spacer(modifier = Modifier.height(12.dp))
+                SubscriptionDetailRow(
+                    icon = Icons.Filled.AllInclusive,
+                    label = "Duration",
+                    value = "Lifetime access"
+                )
+            }
+
+            // Compact plan summary for free users
+            if (!subscriptionState.isActive && availablePlans.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(12.dp))
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Text(
+                    "Available plans",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+
+                availablePlans.forEach { plan ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 3.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            when (plan.billingPeriod) {
+                                BillingPeriod.MONTHLY -> Icons.Filled.CalendarMonth
+                                BillingPeriod.ANNUAL -> Icons.Filled.CalendarToday
+                                BillingPeriod.LIFETIME -> Icons.Filled.AllInclusive
+                            },
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            plan.billingPeriod.label.replaceFirstChar { it.uppercase() },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.weight(1f)
+                        )
+                        if (plan.billingPeriod == BillingPeriod.ANNUAL) {
+                            Surface(
+                                shape = MaterialTheme.shapes.extraSmall,
+                                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
+                            ) {
+                                Text(
+                                    "SAVE 37%",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                        }
+                        Text(
+                            "${plan.formattedPrice}/${plan.billingPeriod.label}",
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
+            }
+
+            // Action button
+            Spacer(modifier = Modifier.height(16.dp))
+            if (subscriptionState.isActive) {
+                OutlinedButton(
+                    onClick = onManage,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(Icons.Filled.Settings, null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Manage Subscription")
+                }
+            } else {
+                Button(
+                    onClick = onManage,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(Icons.Filled.WorkspacePremium, null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Upgrade to Pro")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SubscriptionDetailRow(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    value: String
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            icon,
+            contentDescription = null,
+            modifier = Modifier.size(18.dp),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(modifier = Modifier.width(10.dp))
+        Text(
+            label,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f)
+        )
+        Text(
+            value,
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.Medium,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+    }
 }
 
 @Composable
