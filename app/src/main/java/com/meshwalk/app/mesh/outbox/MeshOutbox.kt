@@ -41,14 +41,17 @@ class MeshOutbox @Inject constructor(
     private val messageRepo: MessageRepository
 ) : MeshOutboxPort {
 
-    private val retryScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var retryScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     /**
      * Cancel all in-flight retry jobs. Called when the mesh service stops so
      * that pending retry coroutines don't keep the scope alive across restarts.
+     * The scope is recreated so that future enqueueMessage calls can still
+     * schedule retries (e.g. after a service restart within the same process).
      */
     fun cancel() {
         retryScope.cancel()
+        retryScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     }
 
     override suspend fun enqueueMessage(message: MeshMessage, recipientNodeId: String) {

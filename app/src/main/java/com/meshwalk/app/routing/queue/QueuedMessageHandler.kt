@@ -69,18 +69,29 @@ class QueuedMessageHandler @Inject constructor(
             // Cancel current cycle — connectivity change may resolve everything
             flushJob?.cancel()
             flushJob = null
+            isFlushActive = false
         }
 
         if (offlineQueue.size() == 0) return
 
         Timber.d("Connectivity restored, attempting immediate queue flush")
-        scope.launch {
-            _events.emit(QueueFlushEvent.ConnectivityRestored(offlineQueue.size()))
-            val remaining = tryFlush()
-            if (remaining > 0) {
-                // Still messages left — restart cycle from beginning
-                synchronized(flushLock) {
-                    startFlushCycle()
+        synchronized(flushLock) {
+            // Guard against duplicate flush cycles from rapid connectivity events
+            if (flushJob?.isActive == true) return
+
+            flushJob = scope.launch {
+                _events.emit(QueueFlushEvent.ConnectivityRestored(offlineQueue.size()))
+                val remaining = tryFlush()
+                if (remaining > 0) {
+                    // Still messages left — restart cycle from beginning
+                    synchronized(flushLock) {
+                        flushJob = null
+                        startFlushCycle()
+                    }
+                } else {
+                    synchronized(flushLock) {
+                        flushJob = null
+                    }
                 }
             }
         }

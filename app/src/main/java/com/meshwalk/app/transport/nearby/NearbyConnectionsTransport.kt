@@ -302,6 +302,10 @@ class NearbyConnectionsTransport @Inject constructor(
     }
 
     override suspend fun sendData(endpointId: String, data: ByteArray): Result<Unit> {
+        if (endpointId !in connectedEndpoints) {
+            Timber.w("Cannot send to $endpointId: not in connected endpoints")
+            return Result.failure(IllegalStateException("Endpoint $endpointId is not connected"))
+        }
         return try {
             val payload = Payload.fromBytes(data)
             connectionsClient.sendPayload(endpointId, payload)
@@ -329,6 +333,8 @@ class NearbyConnectionsTransport @Inject constructor(
     override suspend fun disconnect(endpointId: String) {
         connectionsClient.disconnectFromEndpoint(endpointId)
         connectedEndpoints.remove(endpointId)
+        pendingEndpoints.remove(endpointId)
+        endpointNodeMap.remove(endpointId)
     }
 
     override suspend fun disconnectAll() {
