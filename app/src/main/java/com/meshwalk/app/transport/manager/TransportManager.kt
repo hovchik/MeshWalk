@@ -154,6 +154,9 @@ class TransportManager @Inject constructor(
         bleTransport.disconnectAll()
         endpointTransportMap.clear()
         nodeEndpointMap.clear()
+        // Reset all peer connection states so they don't appear as "online"
+        // after the mesh is stopped (e.g. service destroyed, app killed).
+        peerRepository.resetAllConnectionStates()
     }
 
     override suspend fun startDiscovery() {
@@ -318,9 +321,11 @@ class TransportManager @Inject constructor(
 
                     // Ensure the peer exists in the repository (may be missing for
                     // incoming connections where EndpointDiscovered was never emitted).
+                    // Also refresh lastSeen so the peer doesn't appear stale.
+                    val now = System.currentTimeMillis()
                     val peer = peerRepository.getPeer(nodeId)
                     if (peer != null) {
-                        peerRepository.upsertPeer(peer.copy(isConnected = true))
+                        peerRepository.upsertPeer(peer.copy(isConnected = true, lastSeen = now))
                     } else {
                         peerRepository.upsertPeer(
                             PeerNode(
@@ -363,7 +368,9 @@ class TransportManager @Inject constructor(
                 nodeId?.let {
                     nodeEndpointMap.remove(it)
                     peerRepository.getPeer(it)?.let { peer ->
-                        peerRepository.upsertPeer(peer.copy(isConnected = false))
+                        peerRepository.upsertPeer(
+                            peer.copy(isConnected = false, lastSeen = System.currentTimeMillis())
+                        )
                     }
                     // Schedule reconnection attempts for the lost peer
                     reconnectManager.onPeerDisconnected(it)
@@ -378,8 +385,16 @@ class TransportManager @Inject constructor(
             }
 
             is TransportEvent.DataReceived -> {
+                // Refresh lastSeen for the sending peer so they don't appear stale
+                val senderNodeId = nearbyTransport.getNodeIdForEndpoint(event.endpointId)
+                if (senderNodeId != null) {
+                    peerRepository.getPeer(senderNodeId)?.let { peer ->
+                        peerRepository.upsertPeer(peer.copy(lastSeen = System.currentTimeMillis()))
+                    }
+                }
+
                 // Check if this is an advertisement payload (magic byte prefix)
-                if (event.data.isNotEmpty() && event.data[0] == ADVERTISEMENT_MAGIC) {
+                if (event.data.size > 1 && event.data[0] == ADVERTISEMENT_MAGIC) {
                     val advertData = event.data.copyOfRange(1, event.data.size)
                     try {
                         val advert = NodeAdvertisement.deserialize(advertData)

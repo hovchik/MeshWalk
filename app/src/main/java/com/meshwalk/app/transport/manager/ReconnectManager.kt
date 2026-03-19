@@ -140,8 +140,12 @@ class ReconnectManager @Inject constructor() {
     }
 
     private fun calculateDelay(attemptCount: Int): Long {
-        val delay = INITIAL_DELAY_MS * Math.pow(BACKOFF_MULTIPLIER, attemptCount.toDouble()).toLong()
-        return delay.coerceAtMost(MAX_DELAY_MS)
+        val multiplier = Math.pow(BACKOFF_MULTIPLIER, attemptCount.toDouble())
+        // Clamp before multiplying to avoid Long overflow
+        if (multiplier > MAX_DELAY_MS.toDouble() / INITIAL_DELAY_MS) {
+            return MAX_DELAY_MS
+        }
+        return (INITIAL_DELAY_MS * multiplier.toLong()).coerceAtMost(MAX_DELAY_MS)
     }
 
     private data class BackoffState(

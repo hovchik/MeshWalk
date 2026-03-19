@@ -42,6 +42,7 @@ class MeshForegroundService : Service() {
     @Inject lateinit var meshInbox: MeshInbox
     @Inject lateinit var meshOutbox: MeshOutbox
     @Inject lateinit var messageResendManager: MessageResendManager
+    @Inject lateinit var peerRepository: com.meshwalk.app.domain.repository.PeerRepository
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     @Volatile private var meshStarted = false
@@ -131,6 +132,13 @@ class MeshForegroundService : Service() {
                 withTimeoutOrNull(3_000) {
                     transportManager.stopMesh()
                     routingEngine.stop()
+                }
+                // Always reset peer connection states even if stopMesh timed out,
+                // so peers don't appear as "online" after the service is destroyed.
+                try {
+                    peerRepository.resetAllConnectionStates()
+                } catch (e: Exception) {
+                    Timber.w(e, "Failed to reset peer connection states on destroy")
                 }
             }
             // Cancel the outbox retry scope so in-flight retry coroutines don't
