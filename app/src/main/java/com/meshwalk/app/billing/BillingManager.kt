@@ -205,7 +205,7 @@ class BillingManager @Inject constructor(
             productId = SubscriptionPlans.PRO_LIFETIME_ID,
             name = "MeshWalk Pro Lifetime",
             description = "One-time purchase, yours forever",
-            formattedPrice = "$79.99",
+            formattedPrice = "$49.99",
             billingPeriod = BillingPeriod.LIFETIME
         )
     )

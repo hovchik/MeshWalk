@@ -169,7 +169,7 @@ class GooglePlayBillingProvider(
                     productId = product.productId,
                     name = "MeshWalk Pro Lifetime",
                     description = "One-time purchase, yours forever",
-                    formattedPrice = price?.formattedPrice ?: "$79.99",
+                    formattedPrice = price?.formattedPrice ?: "$49.99",
                     billingPeriod = BillingPeriod.LIFETIME
                 )
             )
