@@ -10,6 +10,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
@@ -86,11 +87,11 @@ class GroupListViewModel @Inject constructor(
 
     val pendingInvitations: StateFlow<List<GroupInvitation>> = groupControlManager.pendingInvitations
 
-    fun createNewGroup(name: String, memberIds: List<String>, temporary: Boolean) {
+    fun createNewGroup(name: String, memberIds: List<String>, temporary: Boolean, lifetimeMs: Long = CreateGroupUseCase.DEFAULT_TEMPORARY_LIFETIME_MS) {
         viewModelScope.launch {
             _state.value = _state.value.copy(isCreating = true, error = null)
             try {
-                createGroup(name, memberIds, temporary)
+                createGroup(name, memberIds, temporary, lifetimeMs)
                 _state.value = _state.value.copy(isCreating = false)
             } catch (e: IllegalStateException) {
                 _state.value = _state.value.copy(
@@ -257,8 +258,8 @@ fun GroupListScreen(
                 maxMembers = viewModel.featureGate.maxGroupSize,
                 isPremium = viewModel.featureGate.isPremium,
                 onDismiss = { showCreateDialog = false },
-                onCreate = { name, members, temp ->
-                    viewModel.createNewGroup(name, members, temp)
+                onCreate = { name, members, temp, lifetimeMs ->
+                    viewModel.createNewGroup(name, members, temp, lifetimeMs)
                     showCreateDialog = false
                 }
             )
@@ -352,9 +353,13 @@ private fun GroupItem(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             } else {
+                val expiryText = if (group.isTemporary && group.expiresAt != null) {
+                    val remaining = group.expiresAt - System.currentTimeMillis()
+                    if (remaining > 0) " • ${TimeUtils.formatDuration(remaining)}" else " • Expired"
+                } else ""
                 Text(
                     "${group.members.size} members" +
-                            if (group.isTemporary) " • Temporary" else "",
+                            (if (group.isTemporary) " • Temporary" else "") + expiryText,
                     style = MaterialTheme.typography.bodySmall
                 )
             }
@@ -388,16 +393,26 @@ private fun GroupItem(
     )
 }
 
+private val LIFETIME_OPTIONS = listOf(
+    "1 hour" to 1 * 60 * 60 * 1000L,
+    "4 hours" to 4 * 60 * 60 * 1000L,
+    "12 hours" to 12 * 60 * 60 * 1000L,
+    "24 hours" to 24 * 60 * 60 * 1000L,
+    "3 days" to 3 * 24 * 60 * 60 * 1000L,
+    "7 days" to 7 * 24 * 60 * 60 * 1000L
+)
+
 @Composable
 private fun CreateGroupDialog(
     availablePeers: List<PeerNode>,
     maxMembers: Int,
     isPremium: Boolean,
     onDismiss: () -> Unit,
-    onCreate: (name: String, memberIds: List<String>, temporary: Boolean) -> Unit
+    onCreate: (name: String, memberIds: List<String>, temporary: Boolean, lifetimeMs: Long) -> Unit
 ) {
     var name by remember { mutableStateOf("") }
     var isTemporary by remember { mutableStateOf(false) }
+    var selectedLifetimeIndex by remember { mutableIntStateOf(1) } // default: 4 hours
     val selectedPeers = remember { mutableStateListOf<String>() }
 
     // Account for the creator being a member (maxMembers includes self)
@@ -423,6 +438,29 @@ private fun CreateGroupDialog(
                 ) {
                     Text("Temporary group", modifier = Modifier.weight(1f))
                     Switch(checked = isTemporary, onCheckedChange = { isTemporary = it })
+                }
+                if (isTemporary) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        "Group lifetime",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                        LIFETIME_OPTIONS.forEachIndexed { index, (label, _) ->
+                            SegmentedButton(
+                                selected = selectedLifetimeIndex == index,
+                                onClick = { selectedLifetimeIndex = index },
+                                shape = SegmentedButtonDefaults.itemShape(
+                                    index = index,
+                                    count = LIFETIME_OPTIONS.size
+                                )
+                            ) {
+                                Text(label, style = MaterialTheme.typography.labelSmall)
+                            }
+                        }
+                    }
                 }
                 Spacer(modifier = Modifier.height(12.dp))
                 Row(
@@ -478,7 +516,10 @@ private fun CreateGroupDialog(
         },
         confirmButton = {
             TextButton(
-                onClick = { onCreate(name, selectedPeers.toList(), isTemporary) },
+                onClick = {
+                    val lifetimeMs = LIFETIME_OPTIONS[selectedLifetimeIndex].second
+                    onCreate(name, selectedPeers.toList(), isTemporary, lifetimeMs)
+                },
                 enabled = name.isNotBlank() && selectedPeers.isNotEmpty()
             ) {
                 Text("Create")

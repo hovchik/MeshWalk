@@ -258,7 +258,7 @@ class MeshOutbox @Inject constructor(
 
             // Send to each member with a unique packetId (to avoid deduplication)
             // and the wrapped payload containing the groupId prefix.
-            var allSent = true
+            var anySent = false
             for (recipientNodeId in recipientNodeIds) {
                 val memberPacket = packet.copy(
                     packetId = UUID.randomUUID().toString(),
@@ -266,16 +266,18 @@ class MeshOutbox @Inject constructor(
                     encryptedPayload = wrappedPayload
                 )
                 val sent = routingEngine.sendPacket(memberPacket)
-                if (!sent) {
-                    allSent = false
+                if (sent) {
+                    anySent = true
+                } else {
                     Timber.w("Group packet ${memberPacket.packetId.take(8)} queued for ${recipientNodeId.take(8)}")
                 }
             }
-            // Only mark SENT if all recipients were reached; otherwise keep
-            // PENDING so MessageResendManager can retry the missing members.
-            if (allSent) {
-                messageRepo.updateDeliveryStatus(message.messageId, DeliveryStatus.SENT)
-            }
+            // Mark SENT once the outbox has processed the message. Even if some
+            // recipients are offline, the store-and-forward queue and
+            // MessageResendManager will handle delivery to them later. Keeping
+            // the message PENDING indefinitely caused the "first message stuck"
+            // bug where only the second message would show as sent.
+            messageRepo.updateDeliveryStatus(message.messageId, DeliveryStatus.SENT)
         } catch (e: Exception) {
             Timber.e(e, "Failed to encrypt/send group message ${message.messageId.take(8)}")
             messageRepo.updateDeliveryStatus(message.messageId, DeliveryStatus.FAILED)

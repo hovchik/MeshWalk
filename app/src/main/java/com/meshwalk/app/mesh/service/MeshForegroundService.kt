@@ -17,6 +17,7 @@ import com.meshwalk.app.MainActivity
 import com.meshwalk.app.R
 import com.meshwalk.app.domain.repository.IdentityRepository
 import com.meshwalk.app.mesh.inbox.MeshInbox
+import com.meshwalk.app.mesh.group.GroupLifecycleManager
 import com.meshwalk.app.mesh.outbox.MeshOutbox
 import com.meshwalk.app.mesh.outbox.MessageResendManager
 import com.meshwalk.app.routing.engine.MeshRoutingEngine
@@ -42,6 +43,7 @@ class MeshForegroundService : Service() {
     @Inject lateinit var meshInbox: MeshInbox
     @Inject lateinit var meshOutbox: MeshOutbox
     @Inject lateinit var messageResendManager: MessageResendManager
+    @Inject lateinit var groupLifecycleManager: GroupLifecycleManager
     @Inject lateinit var peerRepository: com.meshwalk.app.domain.repository.PeerRepository
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -96,6 +98,7 @@ class MeshForegroundService : Service() {
                 routingEngine.start(identity.nodeId)
                 meshInbox.start(identity.nodeId, serviceScope)
                 messageResendManager.start(identity.nodeId, serviceScope)
+                groupLifecycleManager.start(identity.nodeId, serviceScope)
                 transportManager.startMesh(advertisement)
                 meshStarted = true
                 Timber.d("Mesh started for node ${identity.nodeId}")

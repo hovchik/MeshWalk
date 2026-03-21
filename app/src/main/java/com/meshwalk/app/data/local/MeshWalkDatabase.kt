@@ -18,9 +18,10 @@ import com.meshwalk.app.data.local.entity.*
         RoutingEntryEntity::class,
         GroupEntity::class,
         SenderKeyEntity::class,
-        BlockedPeerEntity::class
+        BlockedPeerEntity::class,
+        GroupArchiveEntity::class
     ],
-    version = 6,
+    version = 7,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -33,6 +34,7 @@ abstract class MeshWalkDatabase : RoomDatabase() {
     abstract fun groupDao(): GroupDao
     abstract fun senderKeyDao(): SenderKeyDao
     abstract fun blockedPeerDao(): BlockedPeerDao
+    abstract fun groupArchiveDao(): GroupArchiveDao
 
     companion object {
         const val DATABASE_NAME = "meshwalk_db"
@@ -105,6 +107,30 @@ abstract class MeshWalkDatabase : RoomDatabase() {
                         nodeId TEXT NOT NULL PRIMARY KEY,
                         displayName TEXT,
                         blockedAt INTEGER NOT NULL
+                    )
+                """.trimIndent())
+            }
+        }
+
+        /**
+         * Add group_archives table for storing encrypted archives of expired
+         * temporary groups. Archives are encrypted with the admin's public key.
+         */
+        val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS group_archives (
+                        groupId TEXT NOT NULL PRIMARY KEY,
+                        groupName TEXT NOT NULL,
+                        adminNodeId TEXT NOT NULL,
+                        encryptedData BLOB NOT NULL,
+                        ephemeralPublicKey BLOB NOT NULL,
+                        nonce BLOB NOT NULL,
+                        memberCount INTEGER NOT NULL,
+                        messageCount INTEGER NOT NULL,
+                        createdAt INTEGER NOT NULL,
+                        archivedAt INTEGER NOT NULL,
+                        expiresAt INTEGER NOT NULL
                     )
                 """.trimIndent())
             }

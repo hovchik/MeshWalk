@@ -57,7 +57,8 @@ class GroupControlManager @Inject constructor(
                 groupName = group.name,
                 senderName = group.members.find { it.nodeId == ourNodeId }?.displayName,
                 groupType = group.groupType,
-                memberNodeIds = memberNodeIds
+                memberNodeIds = memberNodeIds,
+                expiresAt = group.expiresAt
             )
 
             val packet = MeshPacket(
@@ -100,7 +101,8 @@ class GroupControlManager @Inject constructor(
             inviterName = parsed.senderName,
             groupType = parsed.groupType,
             memberCount = parsed.memberNodeIds.size,
-            memberNodeIds = parsed.memberNodeIds
+            memberNodeIds = parsed.memberNodeIds,
+            expiresAt = parsed.expiresAt
         )
 
         val current = _pendingInvitations.value.toMutableList()
@@ -131,7 +133,8 @@ class GroupControlManager @Inject constructor(
             name = invitation.groupName,
             creatorNodeId = invitation.inviterNodeId,
             members = members,
-            groupType = invitation.groupType
+            groupType = invitation.groupType,
+            expiresAt = invitation.expiresAt
         )
         groupRepo.createGroup(group)
         conversationRepo.createConversation(
@@ -167,6 +170,39 @@ class GroupControlManager @Inject constructor(
             flags = MeshPacket.FLAG_ACK_REQUESTED
         )
         routingEngine.sendPacket(packet)
+
+        // Distribute our sender key directly to every other member (not just
+        // the creator).  Previously key distribution relied entirely on the
+        // creator relaying keys in handleAccept.  If any of those relay
+        // packets were lost, non-creator members could never decrypt our
+        // messages.  Sending directly provides a redundant path that does not
+        // depend on the creator being online or on the relay succeeding.
+        if (senderKeyBytes != null) {
+            val otherMembers = invitation.memberNodeIds.filter {
+                it != ourNodeId && it != invitation.inviterNodeId
+            }
+            for (memberNodeId in otherMembers) {
+                val keyPayload = serializePayload(
+                    action = ACTION_KEY_DISTRIBUTION,
+                    groupId = invitation.groupId,
+                    groupName = invitation.groupName,
+                    senderName = null,
+                    groupType = invitation.groupType,
+                    senderKey = senderKeyBytes
+                )
+                val keyPacket = MeshPacket(
+                    sourceNodeId = ourNodeId,
+                    destinationNodeId = memberNodeId,
+                    packetType = PacketType.GROUP_CONTROL,
+                    encryptedPayload = keyPayload,
+                    nonce = ByteArray(12),
+                    senderSignature = ByteArray(0),
+                    flags = MeshPacket.FLAG_ACK_REQUESTED
+                )
+                routingEngine.sendPacket(keyPacket)
+                Timber.d("Sent our sender key directly to ${memberNodeId.take(8)} for group ${invitation.groupId.take(8)}")
+            }
+        }
 
         _pendingInvitations.value = _pendingInvitations.value.filter { it.groupId != invitation.groupId }
 
@@ -231,7 +267,8 @@ class GroupControlManager @Inject constructor(
             groupName = group.name,
             senderName = group.members.find { it.nodeId == ourNodeId }?.displayName,
             groupType = group.groupType,
-            memberNodeIds = memberNodeIds
+            memberNodeIds = memberNodeIds,
+            expiresAt = group.expiresAt
         )
         val invitePacket = MeshPacket(
             sourceNodeId = ourNodeId,
@@ -358,7 +395,7 @@ class GroupControlManager @Inject constructor(
             encryptedPayload = keyPayload,
             nonce = ByteArray(12),
             senderSignature = ByteArray(0),
-            flags = 0
+            flags = MeshPacket.FLAG_ACK_REQUESTED
         )
         routingEngine.sendPacket(keyPacket)
     }
@@ -402,7 +439,8 @@ class GroupControlManager @Inject constructor(
         val senderName: String?,
         val groupType: ConversationType,
         val memberNodeIds: List<String> = emptyList(),
-        val senderKey: ByteArray? = null
+        val senderKey: ByteArray? = null,
+        val expiresAt: Long? = null
     )
 
     /**
@@ -411,6 +449,7 @@ class GroupControlManager @Inject constructor(
      * [senderNameLen:4][senderName][groupType:1]
      * [memberCount:4][memberNodeId1Len:4][memberNodeId1]...[memberNodeIdNLen:4][memberNodeIdN]
      * [senderKeyLen:4][senderKey]
+     * [hasExpiresAt:1][expiresAt:8] (optional, only present if hasExpiresAt == 1)
      */
     private fun serializePayload(
         action: Byte,
@@ -419,7 +458,8 @@ class GroupControlManager @Inject constructor(
         senderName: String?,
         groupType: ConversationType,
         memberNodeIds: List<String> = emptyList(),
-        senderKey: ByteArray? = null
+        senderKey: ByteArray? = null,
+        expiresAt: Long? = null
     ): ByteArray {
         val gidBytes = groupId.toByteArray(StandardCharsets.UTF_8)
         val gnameBytes = groupName.toByteArray(StandardCharsets.UTF_8)
@@ -428,8 +468,9 @@ class GroupControlManager @Inject constructor(
         val memberBytesList = memberNodeIds.map { it.toByteArray(StandardCharsets.UTF_8) }
 
         val memberSize = 4 + memberBytesList.sumOf { 4 + it.size } // count + each member
+        val expiresAtSize = 1 + if (expiresAt != null) 8 else 0
         val size = 1 + (4 + gidBytes.size) + (4 + gnameBytes.size) + (4 + snameBytes.size) +
-                1 + memberSize + (4 + keyBytes.size)
+                1 + memberSize + (4 + keyBytes.size) + expiresAtSize
         val buffer = ByteBuffer.allocate(size)
         buffer.put(action)
         buffer.putInt(gidBytes.size).put(gidBytes)
@@ -441,6 +482,12 @@ class GroupControlManager @Inject constructor(
             buffer.putInt(mBytes.size).put(mBytes)
         }
         buffer.putInt(keyBytes.size).put(keyBytes)
+        if (expiresAt != null) {
+            buffer.put(1.toByte())
+            buffer.putLong(expiresAt)
+        } else {
+            buffer.put(0.toByte())
+        }
         return buffer.array()
     }
 
@@ -466,7 +513,13 @@ class GroupControlManager @Inject constructor(
             val keyLen = if (buffer.remaining() >= 4) buffer.getInt() else 0
             val senderKey = if (keyLen > 0) ByteArray(keyLen).also { buffer.get(it) } else null
 
-            ParsedPayload(groupId, groupName, senderName, groupType, memberNodeIds, senderKey)
+            // Read expiresAt if present (backwards-compatible with older payloads)
+            val expiresAt = if (buffer.remaining() >= 1) {
+                val hasExpiresAt = buffer.get()
+                if (hasExpiresAt == 1.toByte() && buffer.remaining() >= 8) buffer.getLong() else null
+            } else null
+
+            ParsedPayload(groupId, groupName, senderName, groupType, memberNodeIds, senderKey, expiresAt)
         } catch (e: Exception) {
             Timber.e(e, "Failed to deserialize group control payload")
             null

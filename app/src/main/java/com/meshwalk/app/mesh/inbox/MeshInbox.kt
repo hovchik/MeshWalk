@@ -44,14 +44,6 @@ class MeshInbox @Inject constructor(
     private val deduplicator: PacketDeduplicator
 ) {
 
-    companion object {
-        /** If a message arrives more than 30 seconds after it was sent, mark it as delayed. */
-        private const val DELAYED_THRESHOLD_MS = 30_000L
-        /** Max time to wait for peer's exchange key to arrive (matches outbox timeout). */
-        private const val KEY_EXCHANGE_TIMEOUT_MS = 5_000L
-        private const val KEY_EXCHANGE_POLL_INTERVAL_MS = 250L
-    }
-
     fun start(ourNodeId: String, scope: CoroutineScope) {
         scope.launch {
             routingEngine.incomingPackets.collect { packet ->
@@ -193,6 +185,17 @@ class MeshInbox @Inject constructor(
         }
     }
 
+    companion object {
+        /** If a message arrives more than 30 seconds after it was sent, mark it as delayed. */
+        private const val DELAYED_THRESHOLD_MS = 30_000L
+        /** Max time to wait for peer's exchange key to arrive (matches outbox timeout). */
+        private const val KEY_EXCHANGE_TIMEOUT_MS = 5_000L
+        private const val KEY_EXCHANGE_POLL_INTERVAL_MS = 250L
+        /** Max time to wait for a group sender key to arrive via KEY_DISTRIBUTION. */
+        private const val GROUP_KEY_WAIT_TIMEOUT_MS = 10_000L
+        private const val GROUP_KEY_POLL_INTERVAL_MS = 250L
+    }
+
     private suspend fun handleGroupMessage(
         packet: com.meshwalk.app.domain.model.MeshPacket,
         ourNodeId: String
@@ -207,10 +210,24 @@ class MeshInbox @Inject constructor(
 
         val (groupId, actualPayload) = groupIdAndPayload
 
-        // Look up the sender's key for this specific group
-        val key = groupKeyManager.getReceivingKey(groupId, packet.sourceNodeId)
+        // Look up the sender's key for this specific group.
+        // The KEY_DISTRIBUTION packet may still be in flight, so wait briefly
+        // for the key to arrive rather than silently dropping the message.
+        var key = groupKeyManager.getReceivingKey(groupId, packet.sourceNodeId)
         if (key == null) {
-            Timber.w("No group sender key for ${packet.sourceNodeId.take(8)} in group ${groupId.take(8)}")
+            Timber.d("Waiting for sender key from ${packet.sourceNodeId.take(8)} in group ${groupId.take(8)}...")
+            val deadline = System.currentTimeMillis() + GROUP_KEY_WAIT_TIMEOUT_MS
+            while (key == null && System.currentTimeMillis() < deadline) {
+                delay(GROUP_KEY_POLL_INTERVAL_MS)
+                key = groupKeyManager.getReceivingKey(groupId, packet.sourceNodeId)
+            }
+        }
+        if (key == null) {
+            // Key still not available after waiting — clear dedup so the packet
+            // can be re-processed if it arrives again via another path or after
+            // the KEY_DISTRIBUTION packet finally arrives.
+            deduplicator.clearPacket(packet.packetId)
+            Timber.w("No group sender key for ${packet.sourceNodeId.take(8)} in group ${groupId.take(8)} after waiting, cleared dedup for retry")
             return
         }
 
