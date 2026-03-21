@@ -171,6 +171,39 @@ class GroupControlManager @Inject constructor(
         )
         routingEngine.sendPacket(packet)
 
+        // Distribute our sender key directly to every other member (not just
+        // the creator).  Previously key distribution relied entirely on the
+        // creator relaying keys in handleAccept.  If any of those relay
+        // packets were lost, non-creator members could never decrypt our
+        // messages.  Sending directly provides a redundant path that does not
+        // depend on the creator being online or on the relay succeeding.
+        if (senderKeyBytes != null) {
+            val otherMembers = invitation.memberNodeIds.filter {
+                it != ourNodeId && it != invitation.inviterNodeId
+            }
+            for (memberNodeId in otherMembers) {
+                val keyPayload = serializePayload(
+                    action = ACTION_KEY_DISTRIBUTION,
+                    groupId = invitation.groupId,
+                    groupName = invitation.groupName,
+                    senderName = null,
+                    groupType = invitation.groupType,
+                    senderKey = senderKeyBytes
+                )
+                val keyPacket = MeshPacket(
+                    sourceNodeId = ourNodeId,
+                    destinationNodeId = memberNodeId,
+                    packetType = PacketType.GROUP_CONTROL,
+                    encryptedPayload = keyPayload,
+                    nonce = ByteArray(12),
+                    senderSignature = ByteArray(0),
+                    flags = MeshPacket.FLAG_ACK_REQUESTED
+                )
+                routingEngine.sendPacket(keyPacket)
+                Timber.d("Sent our sender key directly to ${memberNodeId.take(8)} for group ${invitation.groupId.take(8)}")
+            }
+        }
+
         _pendingInvitations.value = _pendingInvitations.value.filter { it.groupId != invitation.groupId }
 
         Timber.d("Accepted group invite: ${invitation.groupName}")
@@ -362,7 +395,7 @@ class GroupControlManager @Inject constructor(
             encryptedPayload = keyPayload,
             nonce = ByteArray(12),
             senderSignature = ByteArray(0),
-            flags = 0
+            flags = MeshPacket.FLAG_ACK_REQUESTED
         )
         routingEngine.sendPacket(keyPacket)
     }

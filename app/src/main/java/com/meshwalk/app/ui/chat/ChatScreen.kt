@@ -371,6 +371,7 @@ fun ChatScreen(
                 .fillMaxSize()
                 .padding(padding)
                 .consumeWindowInsets(padding)
+                .navigationBarsPadding()
                 .imePadding()
         ) {
             // Message list — fills available space above input bar
