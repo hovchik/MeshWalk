@@ -31,7 +31,6 @@ import com.meshwalk.app.domain.repository.PeerRepository
 import com.meshwalk.app.billing.FeatureGate
 import com.meshwalk.app.domain.usecase.CreateGroupUseCase
 import com.meshwalk.app.mesh.group.GroupControlManager
-import com.meshwalk.app.domain.usecase.CreateGroupUseCase
 import com.meshwalk.app.util.TimeUtils
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
