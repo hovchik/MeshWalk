@@ -125,3 +125,30 @@ data class BlockedPeerEntity(
     val displayName: String?,
     val blockedAt: Long
 )
+
+/**
+ * Encrypted archive of a temporary group after its lifetime expired.
+ * The archive is encrypted using the admin's public key (ECIES: ECDH + AES-GCM).
+ * Only the admin can decrypt it using their private exchange key.
+ */
+@Entity(tableName = "group_archives")
+data class GroupArchiveEntity(
+    @PrimaryKey val groupId: String,
+    val groupName: String,
+    val adminNodeId: String,
+    val encryptedData: ByteArray,       // ECIES-encrypted JSON of messages
+    val ephemeralPublicKey: ByteArray,   // Ephemeral public key for ECIES decryption
+    val nonce: ByteArray,               // AES-GCM nonce
+    val memberCount: Int,
+    val messageCount: Int,
+    val createdAt: Long,                // When the group was created
+    val archivedAt: Long,               // When the group was archived
+    val expiresAt: Long                 // When the group expired
+) {
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is GroupArchiveEntity) return false
+        return groupId == other.groupId
+    }
+    override fun hashCode(): Int = groupId.hashCode()
+}

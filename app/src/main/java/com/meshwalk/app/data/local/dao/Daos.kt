@@ -182,6 +182,24 @@ interface GroupDao {
 }
 
 @Dao
+interface GroupArchiveDao {
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insert(archive: GroupArchiveEntity)
+
+    @Query("SELECT * FROM group_archives WHERE groupId = :groupId")
+    suspend fun getById(groupId: String): GroupArchiveEntity?
+
+    @Query("SELECT * FROM group_archives WHERE adminNodeId = :nodeId ORDER BY archivedAt DESC")
+    fun observeByAdmin(nodeId: String): Flow<List<GroupArchiveEntity>>
+
+    @Query("SELECT * FROM group_archives ORDER BY archivedAt DESC")
+    fun observeAll(): Flow<List<GroupArchiveEntity>>
+
+    @Query("DELETE FROM group_archives WHERE groupId = :groupId")
+    suspend fun delete(groupId: String)
+}
+
+@Dao
 interface BlockedPeerDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(blockedPeer: BlockedPeerEntity)

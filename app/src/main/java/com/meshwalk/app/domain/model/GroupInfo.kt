@@ -65,6 +65,7 @@ data class GroupInvitation(
     val groupType: ConversationType,
     val memberCount: Int,
     val memberNodeIds: List<String> = emptyList(),
+    val expiresAt: Long? = null,
     val receivedAt: Long = System.currentTimeMillis()
 )
 

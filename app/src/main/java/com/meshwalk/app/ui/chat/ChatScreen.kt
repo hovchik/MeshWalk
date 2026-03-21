@@ -364,10 +364,13 @@ fun ChatScreen(
         // Use a Column with imePadding so both the message list and input bar
         // resize correctly when the keyboard opens. The message list takes all
         // available space (weight 1f) and the input bar sits at the bottom.
+        // consumeWindowInsets(padding) prevents imePadding from double-counting
+        // the insets already consumed by Scaffold's content padding.
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
+                .consumeWindowInsets(padding)
                 .imePadding()
         ) {
             // Message list — fills available space above input bar

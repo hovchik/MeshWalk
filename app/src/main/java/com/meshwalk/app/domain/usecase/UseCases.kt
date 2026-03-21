@@ -92,10 +92,16 @@ class CreateGroupUseCase @Inject constructor(
     private val peerRepo: PeerRepository,
     private val groupControlManager: com.meshwalk.app.mesh.group.GroupControlManager
 ) {
+    companion object {
+        /** Default lifetime for temporary groups: 4 hours. */
+        const val DEFAULT_TEMPORARY_LIFETIME_MS = 4 * 60 * 60 * 1000L
+    }
+
     suspend operator fun invoke(
         name: String,
         memberNodeIds: List<String>,
-        temporary: Boolean = false
+        temporary: Boolean = false,
+        lifetimeMs: Long = DEFAULT_TEMPORARY_LIFETIME_MS
     ): GroupInfo {
         val self = identityRepo.getActiveIdentity()
             ?: throw IllegalStateException("No active identity")
@@ -118,7 +124,7 @@ class CreateGroupUseCase @Inject constructor(
             creatorNodeId = self.nodeId,
             members = members.distinctBy { it.nodeId },
             groupType = if (temporary) ConversationType.TEMPORARY_GROUP else ConversationType.GROUP,
-            expiresAt = if (temporary) System.currentTimeMillis() + 4 * 60 * 60 * 1000 else null
+            expiresAt = if (temporary) System.currentTimeMillis() + lifetimeMs else null
         )
 
         groupRepo.createGroup(group)
