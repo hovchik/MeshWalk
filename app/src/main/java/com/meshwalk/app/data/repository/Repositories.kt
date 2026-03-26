@@ -147,7 +147,7 @@ class MessageRepositoryImpl @Inject constructor(
     }
 
     override suspend fun updateReactions(messageId: String, reactions: Map<String, String>) {
-        messageDao.updateReactions(messageId, EntityMapper.serializeReactionsJson(reactions))
+        messageDao.updateReactions(messageId, serializeReactionsJson(reactions))
     }
 
     override suspend fun togglePinned(messageId: String, isPinned: Boolean) {
