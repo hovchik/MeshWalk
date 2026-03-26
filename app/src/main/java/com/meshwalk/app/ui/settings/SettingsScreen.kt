@@ -125,6 +125,8 @@ class SettingsViewModel @Inject constructor(
             groupRepo.updateMemberDisplayName(identity.nodeId, name)
         }
     }
+
+    fun getManageSubscriptionIntent() = billingManager.getManageSubscriptionIntent()
 }
 
 @Composable
@@ -136,6 +138,8 @@ fun SettingsScreen(
     val state by viewModel.state.collectAsState()
     var showEditProfileDialog by remember { mutableStateOf(false) }
 
+    val context = LocalContext.current
+
     Column(
         modifier = Modifier.verticalScroll(rememberScrollState())
     ) {
@@ -145,7 +149,13 @@ fun SettingsScreen(
             subscriptionState = state.subscriptionState,
             featureGate = viewModel.featureGate,
             availablePlans = state.availablePlans,
-            onManage = onSubscription
+            onManage = onSubscription,
+            onManageOnGooglePlay = if (state.subscriptionState.isActive) {
+                {
+                    val intent = viewModel.getManageSubscriptionIntent()
+                    context.startActivity(intent)
+                }
+            } else null
         )
         HorizontalDivider()
 
@@ -800,7 +810,8 @@ private fun SubscriptionInfoCard(
     subscriptionState: SubscriptionState,
     featureGate: FeatureGate,
     availablePlans: List<PlanDetails>,
-    onManage: () -> Unit
+    onManage: () -> Unit,
+    onManageOnGooglePlay: (() -> Unit)? = null
 ) {
     Card(
         modifier = Modifier
@@ -849,16 +860,24 @@ private fun SubscriptionInfoCard(
                             Spacer(modifier = Modifier.width(8.dp))
                             Surface(
                                 shape = MaterialTheme.shapes.extraSmall,
-                                color = if (subscriptionState.isFreeTrial)
-                                    MaterialTheme.colorScheme.tertiary
-                                else MaterialTheme.colorScheme.primary
+                                color = when {
+                                    subscriptionState.isGracePeriod -> MaterialTheme.colorScheme.error
+                                    subscriptionState.isFreeTrial -> MaterialTheme.colorScheme.tertiary
+                                    else -> MaterialTheme.colorScheme.primary
+                                }
                             ) {
                                 Text(
-                                    if (subscriptionState.isFreeTrial) "TRIAL" else "ACTIVE",
+                                    when {
+                                        subscriptionState.isGracePeriod -> "GRACE PERIOD"
+                                        subscriptionState.isFreeTrial -> "TRIAL"
+                                        else -> "ACTIVE"
+                                    },
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = if (subscriptionState.isFreeTrial)
-                                        MaterialTheme.colorScheme.onTertiary
-                                    else MaterialTheme.colorScheme.onPrimary,
+                                    color = when {
+                                        subscriptionState.isGracePeriod -> MaterialTheme.colorScheme.onError
+                                        subscriptionState.isFreeTrial -> MaterialTheme.colorScheme.onTertiary
+                                        else -> MaterialTheme.colorScheme.onPrimary
+                                    },
                                     modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                                 )
                             }
@@ -980,6 +999,17 @@ private fun SubscriptionInfoCard(
                     Icon(Icons.Filled.Settings, null, modifier = Modifier.size(18.dp))
                     Spacer(modifier = Modifier.width(8.dp))
                     Text("Manage Subscription")
+                }
+                if (onManageOnGooglePlay != null) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    TextButton(
+                        onClick = onManageOnGooglePlay,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Filled.OpenInNew, null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Manage on Google Play")
+                    }
                 }
             } else {
                 Button(

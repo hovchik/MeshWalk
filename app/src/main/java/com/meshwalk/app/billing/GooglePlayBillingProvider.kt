@@ -5,9 +5,12 @@ import android.content.Context
 import com.android.billingclient.api.*
 import com.android.billingclient.api.BillingClient.BillingResponseCode
 import com.android.billingclient.api.BillingClient.ProductType
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import timber.log.Timber
 import kotlin.coroutines.resume
@@ -22,7 +25,8 @@ import kotlin.coroutines.resume
  * are refunded by Google after 3 days.
  */
 class GooglePlayBillingProvider(
-    private val context: Context
+    private val context: Context,
+    private val scope: CoroutineScope
 ) : BillingProvider, PurchasesUpdatedListener {
 
     private val _subscriptionState = MutableStateFlow(SubscriptionState())
@@ -33,15 +37,26 @@ class GooglePlayBillingProvider(
 
     private var billingClient: BillingClient? = null
     private var pendingPurchaseActivity: Activity? = null
+    private var reconnectAttempts = 0
 
     // Cached product details for launching purchase flows
     private val subscriptionProducts = mutableMapOf<String, ProductDetails>()
     private val inAppProducts = mutableMapOf<String, ProductDetails>()
 
+    companion object {
+        private const val MAX_RECONNECT_ATTEMPTS = 3
+        private const val RECONNECT_BASE_DELAY_MS = 1000L
+    }
+
     override suspend fun initialize() {
         val client = BillingClient.newBuilder(context)
             .setListener(this)
-            .enablePendingPurchases()
+            .enablePendingPurchases(
+                PendingPurchasesParams.newBuilder()
+                    .enableOneTimeProducts()
+                    .enablePrepaidPlans()
+                    .build()
+            )
             .build()
         billingClient = client
 
@@ -51,6 +66,7 @@ class GooglePlayBillingProvider(
             return
         }
 
+        reconnectAttempts = 0
         queryProducts(client)
         queryExistingPurchases(client)
     }
@@ -70,9 +86,33 @@ class GooglePlayBillingProvider(
 
                 override fun onBillingServiceDisconnected() {
                     Timber.w("Billing service disconnected")
+                    attemptReconnect()
                 }
             })
         }
+
+    private fun attemptReconnect() {
+        if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+            Timber.w("Max reconnect attempts reached, giving up")
+            return
+        }
+        reconnectAttempts++
+        val delayMs = RECONNECT_BASE_DELAY_MS * (1L shl (reconnectAttempts - 1))
+        Timber.d("Scheduling billing reconnect attempt $reconnectAttempts in ${delayMs}ms")
+        scope.launch {
+            delay(delayMs)
+            val client = billingClient ?: return@launch
+            try {
+                val connected = connectClient(client)
+                if (connected) {
+                    reconnectAttempts = 0
+                    queryExistingPurchases(client)
+                }
+            } catch (e: Exception) {
+                Timber.w(e, "Reconnect attempt $reconnectAttempts failed")
+            }
+        }
+    }
 
     private suspend fun queryProducts(client: BillingClient) {
         // Query subscriptions
@@ -223,8 +263,12 @@ class GooglePlayBillingProvider(
 
     /**
      * Query existing purchases to restore state on app launch.
+     * Resets to free tier if no active purchases are found,
+     * handling external cancellations (e.g., via Play Store settings).
      */
     private suspend fun queryExistingPurchases(client: BillingClient) {
+        purchaseFound = false
+
         // Check subscriptions
         val subParams = QueryPurchasesParams.newBuilder()
             .setProductType(ProductType.SUBS)
@@ -233,6 +277,9 @@ class GooglePlayBillingProvider(
         if (subResult.billingResult.responseCode == BillingResponseCode.OK) {
             subResult.purchasesList.forEach { purchase ->
                 processPurchase(purchase)
+                if (purchase.purchaseState == Purchase.PurchaseState.PURCHASED) {
+                    purchaseFound = true
+                }
             }
         }
 
@@ -244,7 +291,16 @@ class GooglePlayBillingProvider(
         if (inAppResult.billingResult.responseCode == BillingResponseCode.OK) {
             inAppResult.purchasesList.forEach { purchase ->
                 processPurchase(purchase)
+                if (purchase.purchaseState == Purchase.PurchaseState.PURCHASED) {
+                    purchaseFound = true
+                }
             }
+        }
+
+        // If no valid purchases found, reset to free tier
+        if (!purchaseFound && _subscriptionState.value.isPremium) {
+            Timber.d("No active purchases found, reverting to free tier")
+            _subscriptionState.value = SubscriptionState()
         }
     }
 
@@ -309,6 +365,10 @@ class GooglePlayBillingProvider(
     }
 
     private fun processPurchase(purchase: Purchase) {
+        if (purchase.purchaseState == Purchase.PurchaseState.PENDING) {
+            Timber.d("Purchase pending: ${purchase.products}")
+            return
+        }
         if (purchase.purchaseState != Purchase.PurchaseState.PURCHASED) return
 
         // Acknowledge the purchase if not already acknowledged
@@ -359,15 +419,38 @@ class GooglePlayBillingProvider(
             purchase.purchaseTime + periodMs
         }
 
+        // Detect grace period: subscription is past its estimated expiry
+        // but Google Play still returns it as a valid purchase (auto-renew
+        // payment is being retried). Users retain access during grace period.
+        val isGracePeriod = isSubscription && expiresAt != null &&
+                System.currentTimeMillis() > expiresAt && purchase.isAutoRenewing
+
         _subscriptionState.value = SubscriptionState(
             isPremium = true,
             planName = if (isInTrialWindow) "Pro Trial" else planName,
             expiresAt = expiresAt,
-            isGracePeriod = false,
+            isGracePeriod = isGracePeriod,
             isFreeTrial = isInTrialWindow
         )
 
-        Timber.d("Subscription activated: $planName")
+        Timber.d("Subscription activated: $planName (grace=$isGracePeriod)")
+    }
+
+    /** Track whether no active purchases were found during a query cycle. */
+    private var purchaseFound = false
+
+    /**
+     * Re-query existing purchases from Google Play.
+     * Call on app resume to detect external subscription changes
+     * (e.g., user cancelled via Play Store settings).
+     */
+    suspend fun refreshPurchases() {
+        val client = billingClient ?: return
+        if (!client.isReady) {
+            val reconnected = connectClient(client)
+            if (!reconnected) return
+        }
+        queryExistingPurchases(client)
     }
 
     override suspend fun restorePurchases(): Boolean {
