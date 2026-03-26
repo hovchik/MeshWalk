@@ -52,8 +52,9 @@ class SubscriptionViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
-            billingManager.initialize()
-            billingManager.observeStateChanges(viewModelScope)
+            // Billing is initialized at app startup in MainActivity.
+            // Refresh purchases to ensure up-to-date state when screen opens.
+            billingManager.refreshPurchases()
             _state.update { it.copy(isLoading = false) }
         }
 

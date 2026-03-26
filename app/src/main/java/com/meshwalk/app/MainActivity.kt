@@ -13,6 +13,8 @@ import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.lifecycleScope
+import com.meshwalk.app.billing.BillingManager
 import com.meshwalk.app.domain.model.DarkModeSetting
 import com.meshwalk.app.domain.repository.SettingsRepository
 import com.meshwalk.app.mesh.service.MeshForegroundService
@@ -21,12 +23,14 @@ import com.meshwalk.app.ui.lock.BiometricLockScreen
 import com.meshwalk.app.ui.theme.MeshWalkTheme
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 @AndroidEntryPoint
 class MainActivity : FragmentActivity() {
 
     @Inject lateinit var settingsRepository: SettingsRepository
+    @Inject lateinit var billingManager: BillingManager
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -39,6 +43,7 @@ class MainActivity : FragmentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         requestPermissions()
+        initializeBilling()
 
         setContent {
             val darkModeSetting by remember {
@@ -98,6 +103,22 @@ class MainActivity : FragmentActivity() {
             permissionLauncher.launch(needed.toTypedArray())
         } else {
             startMeshService()
+        }
+    }
+
+    private fun initializeBilling() {
+        lifecycleScope.launch {
+            billingManager.observeStateChanges(lifecycleScope)
+            billingManager.initialize()
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // Refresh purchase state to detect external changes
+        // (e.g., subscription cancelled via Play Store)
+        lifecycleScope.launch {
+            billingManager.refreshPurchases()
         }
     }
 
