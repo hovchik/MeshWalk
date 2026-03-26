@@ -36,7 +36,15 @@ data class MessageEntity(
     val hopCount: Int,
     val expiresAt: Long?,
     @ColumnInfo(defaultValue = "0")
-    val isDelayed: Boolean = false
+    val isDelayed: Boolean = false,
+    @ColumnInfo(defaultValue = "")
+    val reactionsJson: String = "",
+    @ColumnInfo(defaultValue = "")
+    val replyToMessageId: String? = null,
+    @ColumnInfo(defaultValue = "")
+    val replyToPreview: String? = null,
+    @ColumnInfo(defaultValue = "0")
+    val isPinned: Boolean = false
 )
 
 @Entity(tableName = "conversations")
@@ -50,7 +58,11 @@ data class ConversationEntity(
     val lastMessageAt: Long?,
     val lastMessagePreview: String?,
     val unreadCount: Int,
-    val isEncrypted: Boolean
+    val isEncrypted: Boolean,
+    @ColumnInfo(defaultValue = "")
+    val nickname: String? = null,
+    @ColumnInfo(defaultValue = "0")
+    val isFavorite: Boolean = false
 )
 
 @Entity(tableName = "peers")

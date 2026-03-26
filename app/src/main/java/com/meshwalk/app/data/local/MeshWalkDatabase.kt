@@ -21,7 +21,7 @@ import com.meshwalk.app.data.local.entity.*
         BlockedPeerEntity::class,
         GroupArchiveEntity::class
     ],
-    version = 7,
+    version = 8,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -133,6 +133,20 @@ abstract class MeshWalkDatabase : RoomDatabase() {
                         expiresAt INTEGER NOT NULL
                     )
                 """.trimIndent())
+            }
+        }
+
+        /**
+         * v7->v8: Add reactions, reply-to, pinned to messages; nickname and favorite to conversations.
+         */
+        val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE messages ADD COLUMN reactionsJson TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE messages ADD COLUMN replyToMessageId TEXT DEFAULT ''")
+                db.execSQL("ALTER TABLE messages ADD COLUMN replyToPreview TEXT DEFAULT ''")
+                db.execSQL("ALTER TABLE messages ADD COLUMN isPinned INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE conversations ADD COLUMN nickname TEXT DEFAULT ''")
+                db.execSQL("ALTER TABLE conversations ADD COLUMN isFavorite INTEGER NOT NULL DEFAULT 0")
             }
         }
     }

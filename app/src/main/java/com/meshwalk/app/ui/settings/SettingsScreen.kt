@@ -32,12 +32,14 @@ import java.util.Locale
 import com.meshwalk.app.domain.model.*
 import com.meshwalk.app.domain.repository.GroupRepository
 import com.meshwalk.app.domain.repository.IdentityRepository
+import com.meshwalk.app.domain.repository.PeerRepository
 import com.meshwalk.app.domain.repository.SettingsRepository
 import com.meshwalk.app.domain.usecase.TransportManagerPort
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import javax.inject.Inject
+import kotlin.math.roundToInt
 
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
@@ -46,7 +48,8 @@ class SettingsViewModel @Inject constructor(
     private val groupRepo: GroupRepository,
     private val transportManager: TransportManagerPort,
     val featureGate: FeatureGate,
-    private val billingManager: BillingManager
+    private val billingManager: BillingManager,
+    private val peerRepo: PeerRepository
 ) : ViewModel() {
 
     data class UiState(
@@ -54,7 +57,9 @@ class SettingsViewModel @Inject constructor(
         val identity: NodeIdentity? = null,
         val isScanning: Boolean = false,
         val subscriptionState: SubscriptionState = SubscriptionState(),
-        val availablePlans: List<PlanDetails> = emptyList()
+        val availablePlans: List<PlanDetails> = emptyList(),
+        val peerCount: Int = 0,
+        val connectedPeerCount: Int = 0
     )
 
     private val _state = MutableStateFlow(UiState())
@@ -77,6 +82,17 @@ class SettingsViewModel @Inject constructor(
                     availablePlans = plans
                 )
             }.collect { _state.value = it }
+        }
+
+        viewModelScope.launch {
+            peerRepo.observeNearbyPeers().collect { peers ->
+                _state.update { current ->
+                    current.copy(
+                        peerCount = peers.size,
+                        connectedPeerCount = peers.count { it.isConnected }
+                    )
+                }
+            }
         }
     }
 
@@ -148,6 +164,44 @@ fun SettingsScreen(
                     Icon(Icons.Filled.PersonOff, null, tint = MaterialTheme.colorScheme.outline)
                 }
             )
+        }
+        HorizontalDivider()
+
+        // Network Dashboard section (free tier)
+        SectionHeader("Network")
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceVariant
+            )
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    NetworkStatItem(
+                        label = "Connected",
+                        value = "${state.connectedPeerCount}",
+                        icon = Icons.Filled.Link,
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                    NetworkStatItem(
+                        label = "Total Seen",
+                        value = "${state.peerCount}",
+                        icon = Icons.Filled.People,
+                        tint = MaterialTheme.colorScheme.tertiary
+                    )
+                    NetworkStatItem(
+                        label = "Scan Mode",
+                        value = state.settings.scanMode.label,
+                        icon = Icons.Filled.Radar,
+                        tint = MaterialTheme.colorScheme.secondary
+                    )
+                }
+            }
         }
         HorizontalDivider()
 
@@ -223,6 +277,53 @@ fun SettingsScreen(
         )
         HorizontalDivider()
 
+        // Battery
+        SectionHeader("Battery & Power")
+        SwitchItem(
+            title = "Battery-aware mesh",
+            subtitle = "Reduce scan frequency when battery is low",
+            checked = state.settings.batteryAwareMeshEnabled,
+            onToggle = { viewModel.updateSettings { it.copy(batteryAwareMeshEnabled = !it.batteryAwareMeshEnabled) } }
+        )
+        if (state.settings.batteryAwareMeshEnabled) {
+            ListItem(
+                headlineContent = { Text("Low battery threshold") },
+                supportingContent = {
+                    Column {
+                        Text("Switch to Battery Saver below ${state.settings.lowBatteryThresholdPercent}%")
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Slider(
+                            value = state.settings.lowBatteryThresholdPercent.toFloat(),
+                            onValueChange = { newValue ->
+                                viewModel.updateSettings {
+                                    it.copy(lowBatteryThresholdPercent = newValue.roundToInt())
+                                }
+                            },
+                            valueRange = 5f..50f,
+                            steps = 8
+                        )
+                    }
+                }
+            )
+        }
+        HorizontalDivider()
+
+        // Messages
+        SectionHeader("Messages")
+        SwitchItem(
+            title = "Auto-retry failed messages",
+            subtitle = "Automatically resend failed messages on reconnect",
+            checked = state.settings.autoRetryFailedMessages,
+            onToggle = { viewModel.updateSettings { it.copy(autoRetryFailedMessages = !it.autoRetryFailedMessages) } }
+        )
+        SwitchItem(
+            title = "Read receipts",
+            subtitle = "Send and receive read receipts for messages",
+            checked = state.settings.readReceiptsEnabled,
+            onToggle = { viewModel.updateSettings { it.copy(readReceiptsEnabled = !it.readReceiptsEnabled) } }
+        )
+        HorizontalDivider()
+
         // Security
         SectionHeader("Security")
         val context = LocalContext.current
@@ -248,6 +349,44 @@ fun SettingsScreen(
 
         // Appearance
         SectionHeader("Appearance")
+
+        // Theme toggle
+        ListItem(
+            headlineContent = { Text("Theme") },
+            supportingContent = { Text("Choose light, dark, or system theme") },
+            trailingContent = {
+                SingleChoiceSegmentedButtonRow {
+                    DarkModeSetting.entries.forEachIndexed { index, mode ->
+                        SegmentedButton(
+                            selected = state.settings.darkMode == mode,
+                            onClick = {
+                                viewModel.updateSettings { it.copy(darkMode = mode) }
+                            },
+                            shape = SegmentedButtonDefaults.itemShape(
+                                index = index,
+                                count = DarkModeSetting.entries.size
+                            ),
+                            icon = {}
+                        ) {
+                            Text(
+                                when (mode) {
+                                    DarkModeSetting.LIGHT -> "Light"
+                                    DarkModeSetting.DARK -> "Dark"
+                                    DarkModeSetting.SYSTEM -> "System"
+                                },
+                                style = MaterialTheme.typography.labelSmall
+                            )
+                        }
+                    }
+                }
+            }
+        )
+        SwitchItem(
+            title = "Haptic feedback",
+            subtitle = "Vibrate on key interactions",
+            checked = state.settings.hapticFeedbackEnabled,
+            onToggle = { viewModel.updateSettings { it.copy(hapticFeedbackEnabled = !it.hapticFeedbackEnabled) } }
+        )
         SwitchItem(
             title = "Show hop count",
             subtitle = "Display message route info in chats",
@@ -259,6 +398,12 @@ fun SettingsScreen(
             subtitle = "Show lock icon on encrypted chats",
             checked = state.settings.showEncryptionBadge,
             onToggle = { viewModel.updateSettings { it.copy(showEncryptionBadge = !it.showEncryptionBadge) } }
+        )
+        SwitchItem(
+            title = "Signal strength indicators",
+            subtitle = "Show signal strength per peer in lists",
+            checked = state.settings.showSignalStrength,
+            onToggle = { viewModel.updateSettings { it.copy(showSignalStrength = !it.showSignalStrength) } }
         )
         ListItem(
             headlineContent = { Text("Network graph refresh") },
@@ -400,6 +545,34 @@ fun SettingsScreen(
                 }
             )
         }
+    }
+}
+
+@Composable
+private fun NetworkStatItem(
+    label: String,
+    value: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    tint: androidx.compose.ui.graphics.Color
+) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Icon(
+            icon,
+            contentDescription = null,
+            modifier = Modifier.size(24.dp),
+            tint = tint
+        )
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+            text = value,
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold
+        )
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }
 

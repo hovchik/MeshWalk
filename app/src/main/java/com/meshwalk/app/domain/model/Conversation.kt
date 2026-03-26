@@ -15,11 +15,16 @@ data class Conversation(
     val lastMessageAt: Long? = null,
     val lastMessagePreview: String? = null,
     val unreadCount: Int = 0,
-    val isEncrypted: Boolean = true
+    val isEncrypted: Boolean = true,
+    /** User-assigned nickname for the peer (DIRECT conversations only). */
+    val nickname: String? = null,
+    /** Whether this conversation is marked as a favorite. */
+    val isFavorite: Boolean = false
 ) {
-    /** Display title: group name, cached peer name, or truncated node ID. */
+    /** Display title: nickname, group name, cached peer name, or truncated node ID. */
     val displayTitle: String
-        get() = title
+        get() = nickname
+            ?: title
             ?: peerDisplayName
             ?: participants.firstOrNull()?.take(8)
             ?: "Unknown"

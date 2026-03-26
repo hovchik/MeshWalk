@@ -17,7 +17,15 @@ data class MeshMessage(
     val hopCount: Int = 0,
     val expiresAt: Long? = null,
     /** True when the message was received significantly later than it was sent (offline resend). */
-    val isDelayed: Boolean = false
+    val isDelayed: Boolean = false,
+    /** Emoji reactions mapped by reactor nodeId. */
+    val reactions: Map<String, String> = emptyMap(),
+    /** If this is a reply, the messageId of the original message. */
+    val replyToMessageId: String? = null,
+    /** Preview text of the replied-to message (cached for display). */
+    val replyToPreview: String? = null,
+    /** Whether this message is pinned in the conversation. */
+    val isPinned: Boolean = false
 )
 
 sealed interface MessageContent {

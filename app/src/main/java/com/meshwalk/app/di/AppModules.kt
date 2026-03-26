@@ -33,7 +33,7 @@ object DatabaseModule {
             MeshWalkDatabase::class.java,
             MeshWalkDatabase.DATABASE_NAME
         )
-            .addMigrations(MeshWalkDatabase.MIGRATION_1_2, MeshWalkDatabase.MIGRATION_2_3, MeshWalkDatabase.MIGRATION_3_4, MeshWalkDatabase.MIGRATION_4_5, MeshWalkDatabase.MIGRATION_5_6, MeshWalkDatabase.MIGRATION_6_7)
+            .addMigrations(MeshWalkDatabase.MIGRATION_1_2, MeshWalkDatabase.MIGRATION_2_3, MeshWalkDatabase.MIGRATION_3_4, MeshWalkDatabase.MIGRATION_4_5, MeshWalkDatabase.MIGRATION_5_6, MeshWalkDatabase.MIGRATION_6_7, MeshWalkDatabase.MIGRATION_7_8)
             .fallbackToDestructiveMigration()
             .build()
     }

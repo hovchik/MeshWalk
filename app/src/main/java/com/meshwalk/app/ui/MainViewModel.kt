@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.meshwalk.app.domain.model.NodeIdentity
 import com.meshwalk.app.domain.model.PeerNode
+import com.meshwalk.app.domain.repository.ConversationRepository
 import com.meshwalk.app.domain.repository.IdentityRepository
 import com.meshwalk.app.domain.repository.PeerRepository
 import com.meshwalk.app.mesh.service.MeshForegroundService
@@ -15,7 +16,8 @@ import javax.inject.Inject
 @HiltViewModel
 class MainViewModel @Inject constructor(
     identityRepo: IdentityRepository,
-    peerRepo: PeerRepository
+    peerRepo: PeerRepository,
+    conversationRepo: ConversationRepository
 ) : ViewModel() {
 
     val identity: StateFlow<NodeIdentity?> = identityRepo.observeActiveIdentity()
@@ -42,4 +44,7 @@ class MainViewModel @Inject constructor(
             .minByOrNull { it.hopCount * 1000 - (it.signalStrength ?: -100) }
             ?: peerList.minByOrNull { it.hopCount }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
+    val totalUnreadCount: StateFlow<Int> = conversationRepo.observeTotalUnreadCount()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
 }

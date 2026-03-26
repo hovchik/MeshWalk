@@ -131,7 +131,8 @@ class MeshInbox @Inject constructor(
             conversationId = conversation.conversationId,
             senderName = senderName,
             messagePreview = preview,
-            isGroupMessage = false
+            isGroupMessage = false,
+            peerNodeId = packet.sourceNodeId
         )
 
         Timber.d("Received direct message from ${packet.sourceNodeId.take(8)}: ${preview.take(30)}")
@@ -265,7 +266,8 @@ class MeshInbox @Inject constructor(
             conversationId = localMessage.conversationId,
             senderName = senderName,
             messagePreview = preview,
-            isGroupMessage = true
+            isGroupMessage = true,
+            peerNodeId = packet.sourceNodeId
         )
 
         Timber.d("Received group message in ${groupId.take(8)} from ${packet.sourceNodeId.take(8)}")

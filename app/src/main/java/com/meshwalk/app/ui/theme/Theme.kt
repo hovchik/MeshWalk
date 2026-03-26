@@ -6,6 +6,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import com.meshwalk.app.domain.model.DarkModeSetting
 
 // MeshWalk brand colors — vibrant teal/cyan palette
 val MeshTeal = Color(0xFF00BFA5)
@@ -65,6 +66,25 @@ fun MeshWalkTheme(
     MaterialTheme(
         colorScheme = colorScheme,
         typography = Typography(),
+        content = content
+    )
+}
+
+@Composable
+fun MeshWalkTheme(
+    darkModeSetting: DarkModeSetting = DarkModeSetting.SYSTEM,
+    dynamicColor: Boolean = true,
+    content: @Composable () -> Unit
+) {
+    val darkTheme = when (darkModeSetting) {
+        DarkModeSetting.LIGHT -> false
+        DarkModeSetting.DARK -> true
+        DarkModeSetting.SYSTEM -> isSystemInDarkTheme()
+    }
+
+    MeshWalkTheme(
+        darkTheme = darkTheme,
+        dynamicColor = dynamicColor,
         content = content
     )
 }

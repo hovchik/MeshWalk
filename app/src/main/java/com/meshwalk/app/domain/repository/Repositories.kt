@@ -25,6 +25,11 @@ interface MessageRepository {
     suspend fun getMessageById(messageId: String): MeshMessage?
     suspend fun getFailedMessagesForPeer(peerNodeId: String): List<MeshMessage>
     suspend fun getStalePendingMessagesForPeer(peerNodeId: String, staleBefore: Long): List<MeshMessage>
+    suspend fun updateReactions(messageId: String, reactions: Map<String, String>)
+    suspend fun togglePinned(messageId: String, isPinned: Boolean)
+    fun observePinnedMessages(conversationId: String): Flow<List<MeshMessage>>
+    suspend fun searchMessages(conversationId: String, query: String): List<MeshMessage>
+    suspend fun searchAllMessages(query: String): List<MeshMessage>
 }
 
 interface ConversationRepository {
@@ -37,6 +42,9 @@ interface ConversationRepository {
     suspend fun incrementUnread(conversationId: String)
     suspend fun clearUnread(conversationId: String)
     suspend fun deleteConversation(conversationId: String)
+    suspend fun updateNickname(conversationId: String, nickname: String?)
+    suspend fun toggleFavorite(conversationId: String, isFavorite: Boolean)
+    fun observeTotalUnreadCount(): Flow<Int>
 }
 
 interface PeerRepository {

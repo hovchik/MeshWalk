@@ -8,6 +8,7 @@ import com.meshwalk.app.crypto.keys.MeshKeyManager
 import com.meshwalk.app.crypto.keys.KeyStorage
 import com.meshwalk.app.data.local.dao.*
 import com.meshwalk.app.data.local.entity.BlockedPeerEntity
+import com.meshwalk.app.data.mapper.EntityMapper.serializeReactionsJson
 import com.meshwalk.app.data.mapper.EntityMapper.toDomain
 import com.meshwalk.app.data.mapper.EntityMapper.toEntity
 import com.meshwalk.app.domain.model.*
@@ -144,6 +145,27 @@ class MessageRepositoryImpl @Inject constructor(
     override suspend fun getStalePendingMessagesForPeer(peerNodeId: String, staleBefore: Long): List<MeshMessage> {
         return messageDao.getStalePendingForPeer(peerNodeId, staleBefore).map { it.toDomain() }
     }
+
+    override suspend fun updateReactions(messageId: String, reactions: Map<String, String>) {
+        messageDao.updateReactions(messageId, serializeReactionsJson(reactions))
+    }
+
+    override suspend fun togglePinned(messageId: String, isPinned: Boolean) {
+        messageDao.updatePinned(messageId, isPinned)
+    }
+
+    override fun observePinnedMessages(conversationId: String): Flow<List<MeshMessage>> {
+        return messageDao.observePinnedMessages(conversationId)
+            .map { entities -> entities.map { it.toDomain() } }
+    }
+
+    override suspend fun searchMessages(conversationId: String, query: String): List<MeshMessage> {
+        return messageDao.searchMessages(conversationId, query).map { it.toDomain() }
+    }
+
+    override suspend fun searchAllMessages(query: String): List<MeshMessage> {
+        return messageDao.searchAllMessages(query).map { it.toDomain() }
+    }
 }
 
 // ============================================================
@@ -207,6 +229,18 @@ class ConversationRepositoryImpl @Inject constructor(
 
     override suspend fun deleteConversation(conversationId: String) {
         conversationDao.delete(conversationId)
+    }
+
+    override suspend fun updateNickname(conversationId: String, nickname: String?) {
+        conversationDao.updateNickname(conversationId, nickname)
+    }
+
+    override suspend fun toggleFavorite(conversationId: String, isFavorite: Boolean) {
+        conversationDao.updateFavorite(conversationId, isFavorite)
+    }
+
+    override fun observeTotalUnreadCount(): Flow<Int> {
+        return conversationDao.observeTotalUnreadCount().map { it ?: 0 }
     }
 }
 
@@ -464,6 +498,12 @@ class SettingsRepositoryImpl @Inject constructor(
         private val ONBOARDING_DONE = booleanPreferencesKey("onboarding_done")
         private val FINGERPRINT_LOCK_ENABLED = booleanPreferencesKey("fingerprint_lock_enabled")
         private val NETWORK_GRAPH_REFRESH_SECONDS = intPreferencesKey("network_graph_refresh_seconds")
+        private val BATTERY_AWARE_MESH = booleanPreferencesKey("battery_aware_mesh")
+        private val LOW_BATTERY_THRESHOLD = intPreferencesKey("low_battery_threshold")
+        private val SHOW_SIGNAL_STRENGTH = booleanPreferencesKey("show_signal_strength")
+        private val HAPTIC_FEEDBACK = booleanPreferencesKey("haptic_feedback")
+        private val AUTO_RETRY_FAILED = booleanPreferencesKey("auto_retry_failed")
+        private val READ_RECEIPTS = booleanPreferencesKey("read_receipts")
     }
 
     override fun observeSettings(): Flow<AppSettings> {
@@ -488,6 +528,12 @@ class SettingsRepositoryImpl @Inject constructor(
             prefs[GROUP_MESSAGE_HISTORY_COUNT] = settings.groupMessageHistoryCount
             prefs[FINGERPRINT_LOCK_ENABLED] = settings.fingerprintLockEnabled
             prefs[NETWORK_GRAPH_REFRESH_SECONDS] = settings.networkGraphRefreshSeconds
+            prefs[BATTERY_AWARE_MESH] = settings.batteryAwareMeshEnabled
+            prefs[LOW_BATTERY_THRESHOLD] = settings.lowBatteryThresholdPercent
+            prefs[SHOW_SIGNAL_STRENGTH] = settings.showSignalStrength
+            prefs[HAPTIC_FEEDBACK] = settings.hapticFeedbackEnabled
+            prefs[AUTO_RETRY_FAILED] = settings.autoRetryFailedMessages
+            prefs[READ_RECEIPTS] = settings.readReceiptsEnabled
         }
     }
 
@@ -515,6 +561,12 @@ class SettingsRepositoryImpl @Inject constructor(
         showEncryptionBadge = this[SHOW_ENCRYPTION_BADGE] ?: true,
         groupMessageHistoryCount = this[GROUP_MESSAGE_HISTORY_COUNT] ?: 50,
         fingerprintLockEnabled = this[FINGERPRINT_LOCK_ENABLED] ?: false,
-        networkGraphRefreshSeconds = this[NETWORK_GRAPH_REFRESH_SECONDS] ?: 5
+        networkGraphRefreshSeconds = this[NETWORK_GRAPH_REFRESH_SECONDS] ?: 5,
+        batteryAwareMeshEnabled = this[BATTERY_AWARE_MESH] ?: true,
+        lowBatteryThresholdPercent = this[LOW_BATTERY_THRESHOLD] ?: 20,
+        showSignalStrength = this[SHOW_SIGNAL_STRENGTH] ?: true,
+        hapticFeedbackEnabled = this[HAPTIC_FEEDBACK] ?: true,
+        autoRetryFailedMessages = this[AUTO_RETRY_FAILED] ?: true,
+        readReceiptsEnabled = this[READ_RECEIPTS] ?: true
     )
 }
