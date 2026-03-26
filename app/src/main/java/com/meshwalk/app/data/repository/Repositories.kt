@@ -8,6 +8,7 @@ import com.meshwalk.app.crypto.keys.MeshKeyManager
 import com.meshwalk.app.crypto.keys.KeyStorage
 import com.meshwalk.app.data.local.dao.*
 import com.meshwalk.app.data.local.entity.BlockedPeerEntity
+import com.meshwalk.app.data.mapper.EntityMapper.serializeReactionsJson
 import com.meshwalk.app.data.mapper.EntityMapper.toDomain
 import com.meshwalk.app.data.mapper.EntityMapper.toEntity
 import com.meshwalk.app.domain.model.*
