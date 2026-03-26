@@ -81,8 +81,8 @@ interface MessageDao {
     @Query("SELECT * FROM messages WHERE conversationId = :conversationId AND contentText LIKE '%' || :query || '%' ORDER BY timestamp DESC")
     suspend fun searchMessages(conversationId: String, query: String): List<MessageEntity>
 
-    @Query("SELECT * FROM messages WHERE contentText LIKE '%' || :query || '%' ORDER BY timestamp DESC LIMIT :limit")
-    suspend fun searchAllMessages(query: String, limit: Int = 100): List<MessageEntity>
+    @Query("SELECT * FROM messages WHERE contentText LIKE '%' || :query || '%' ORDER BY timestamp DESC LIMIT 100")
+    suspend fun searchAllMessages(query: String): List<MessageEntity>
 }
 
 @Dao
