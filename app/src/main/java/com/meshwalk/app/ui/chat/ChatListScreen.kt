@@ -1,7 +1,8 @@
 package com.meshwalk.app.ui.chat
 
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -12,6 +13,8 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -39,6 +42,9 @@ class ChatListViewModel @Inject constructor(
 
     data class UiState(
         val conversations: List<Conversation> = emptyList(),
+        val favoriteConversations: List<Conversation> = emptyList(),
+        val regularConversations: List<Conversation> = emptyList(),
+        val totalUnreadCount: Int = 0,
         val needsSetup: Boolean = false,
         val isLoading: Boolean = true,
         val showEncryptionBadge: Boolean = true
@@ -59,10 +65,21 @@ class ChatListViewModel @Inject constructor(
 
             combine(
                 conversationRepo.observeConversations(),
-                settingsRepo.observeSettings()
-            ) { conversations, settings ->
+                settingsRepo.observeSettings(),
+                conversationRepo.observeTotalUnreadCount()
+            ) { conversations, settings, totalUnread ->
+                val directConversations = conversations.filter { it.type == ConversationType.DIRECT }
+                val favorites = directConversations
+                    .filter { it.isFavorite }
+                    .sortedByDescending { it.lastMessageAt }
+                val regular = directConversations
+                    .filter { !it.isFavorite }
+                    .sortedByDescending { it.lastMessageAt }
                 UiState(
-                    conversations = conversations.filter { it.type == ConversationType.DIRECT },
+                    conversations = directConversations,
+                    favoriteConversations = favorites,
+                    regularConversations = regular,
+                    totalUnreadCount = totalUnread,
                     isLoading = false,
                     showEncryptionBadge = settings.showEncryptionBadge
                 )
@@ -76,8 +93,16 @@ class ChatListViewModel @Inject constructor(
             conversationRepo.deleteConversation(conversationId)
         }
     }
+
+    fun toggleFavorite(conversationId: String) {
+        viewModelScope.launch {
+            val conv = conversationRepo.getConversation(conversationId) ?: return@launch
+            conversationRepo.toggleFavorite(conversationId, !conv.isFavorite)
+        }
+    }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChatListScreen(
     onChatClick: (conversationId: String, peerNodeId: String) -> Unit,
@@ -104,18 +129,65 @@ fun ChatListScreen(
         LazyColumn(
             contentPadding = PaddingValues(vertical = 8.dp)
         ) {
-            items(state.conversations, key = { it.conversationId }) { conversation ->
-                ConversationItem(
-                    conversation = conversation,
-                    showEncryptionBadge = state.showEncryptionBadge,
-                    onClick = {
-                        onChatClick(
-                            conversation.conversationId,
-                            conversation.participants.firstOrNull() ?: ""
-                        )
-                    },
-                    onDelete = { deleteTarget = conversation }
-                )
+            // Total unread count header
+            if (state.totalUnreadCount > 0) {
+                item(key = "unread_header") {
+                    TotalUnreadHeader(totalUnreadCount = state.totalUnreadCount)
+                }
+            }
+
+            // Favorites section
+            if (state.favoriteConversations.isNotEmpty()) {
+                item(key = "favorites_header") {
+                    SectionHeader(title = "Favorites")
+                }
+                items(
+                    state.favoriteConversations,
+                    key = { "fav_${it.conversationId}" }
+                ) { conversation ->
+                    SwipeableConversationItem(
+                        conversation = conversation,
+                        showEncryptionBadge = state.showEncryptionBadge,
+                        onClick = {
+                            onChatClick(
+                                conversation.conversationId,
+                                conversation.participants.firstOrNull() ?: ""
+                            )
+                        },
+                        onDelete = { deleteTarget = conversation },
+                        onToggleFavorite = {
+                            viewModel.toggleFavorite(conversation.conversationId)
+                        }
+                    )
+                }
+            }
+
+            // Regular conversations section
+            if (state.regularConversations.isNotEmpty()) {
+                if (state.favoriteConversations.isNotEmpty()) {
+                    item(key = "conversations_header") {
+                        SectionHeader(title = "Conversations")
+                    }
+                }
+                items(
+                    state.regularConversations,
+                    key = { "reg_${it.conversationId}" }
+                ) { conversation ->
+                    SwipeableConversationItem(
+                        conversation = conversation,
+                        showEncryptionBadge = state.showEncryptionBadge,
+                        onClick = {
+                            onChatClick(
+                                conversation.conversationId,
+                                conversation.participants.firstOrNull() ?: ""
+                            )
+                        },
+                        onDelete = { deleteTarget = conversation },
+                        onToggleFavorite = {
+                            viewModel.toggleFavorite(conversation.conversationId)
+                        }
+                    )
+                }
             }
         }
     }
@@ -142,6 +214,123 @@ fun ChatListScreen(
     }
 }
 
+@Composable
+private fun TotalUnreadHeader(totalUnreadCount: Int) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            Icons.Filled.Email,
+            contentDescription = null,
+            modifier = Modifier.size(20.dp),
+            tint = MaterialTheme.colorScheme.primary
+        )
+        Spacer(modifier = Modifier.width(8.dp))
+        Text(
+            text = "$totalUnreadCount unread message${if (totalUnreadCount != 1) "s" else ""}",
+            style = MaterialTheme.typography.titleSmall,
+            color = MaterialTheme.colorScheme.primary,
+            fontWeight = FontWeight.SemiBold
+        )
+    }
+    HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+}
+
+@Composable
+private fun SectionHeader(title: String) {
+    Text(
+        text = title,
+        style = MaterialTheme.typography.labelLarge,
+        color = MaterialTheme.colorScheme.primary,
+        fontWeight = FontWeight.Bold,
+        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SwipeableConversationItem(
+    conversation: Conversation,
+    showEncryptionBadge: Boolean,
+    onClick: () -> Unit,
+    onDelete: () -> Unit,
+    onToggleFavorite: () -> Unit
+) {
+    val dismissState = rememberSwipeToDismissBoxState(
+        confirmValueChange = { dismissValue ->
+            when (dismissValue) {
+                SwipeToDismissBoxValue.EndToStart -> {
+                    onDelete()
+                    false // Don't settle; let the dialog handle it
+                }
+                SwipeToDismissBoxValue.StartToEnd -> {
+                    onToggleFavorite()
+                    false // Snap back after toggling
+                }
+                SwipeToDismissBoxValue.Settled -> false
+            }
+        }
+    )
+
+    SwipeToDismissBox(
+        state = dismissState,
+        backgroundContent = {
+            val direction = dismissState.dismissDirection
+            val color by animateColorAsState(
+                when (dismissState.targetValue) {
+                    SwipeToDismissBoxValue.EndToStart -> MaterialTheme.colorScheme.errorContainer
+                    SwipeToDismissBoxValue.StartToEnd -> Color(0xFFFFF3E0) // light orange/gold
+                    else -> Color.Transparent
+                },
+                label = "swipe_bg_color"
+            )
+            val icon = when (direction) {
+                SwipeToDismissBoxValue.EndToStart -> Icons.Filled.Delete
+                SwipeToDismissBoxValue.StartToEnd -> Icons.Filled.Star
+                else -> null
+            }
+            val iconTint = when (direction) {
+                SwipeToDismissBoxValue.EndToStart -> MaterialTheme.colorScheme.error
+                SwipeToDismissBoxValue.StartToEnd -> Color(0xFFFFA000) // amber
+                else -> Color.Transparent
+            }
+            val alignment = when (direction) {
+                SwipeToDismissBoxValue.EndToStart -> Alignment.CenterEnd
+                else -> Alignment.CenterStart
+            }
+
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(color)
+                    .padding(horizontal = 24.dp),
+                contentAlignment = alignment
+            ) {
+                icon?.let {
+                    Icon(
+                        it,
+                        contentDescription = null,
+                        tint = iconTint,
+                        modifier = Modifier.size(28.dp)
+                    )
+                }
+            }
+        },
+        enableDismissFromStartToEnd = true,
+        enableDismissFromEndToStart = true
+    ) {
+        ConversationItem(
+            conversation = conversation,
+            showEncryptionBadge = showEncryptionBadge,
+            onClick = onClick,
+            onDelete = onDelete
+        )
+    }
+}
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ConversationItem(
@@ -156,11 +345,23 @@ private fun ConversationItem(
             onLongClick = onDelete
         ),
         headlineContent = {
-            Text(
-                text = conversation.displayTitle,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = conversation.displayTitle,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false)
+                )
+                if (conversation.isFavorite) {
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Icon(
+                        Icons.Filled.Star,
+                        contentDescription = "Favorite",
+                        modifier = Modifier.size(16.dp),
+                        tint = Color(0xFFFFA000) // amber
+                    )
+                }
+            }
         },
         supportingContent = {
             conversation.lastMessagePreview?.let { preview ->
@@ -191,8 +392,19 @@ private fun ConversationItem(
                 }
                 if (conversation.unreadCount > 0) {
                     Spacer(modifier = Modifier.height(4.dp))
-                    Badge {
-                        Text(conversation.unreadCount.toString())
+                    val badgeColor = if (conversation.unreadCount > 5) {
+                        Color(0xFFD32F2F) // red for high count
+                    } else {
+                        MaterialTheme.colorScheme.primary
+                    }
+                    Badge(
+                        containerColor = badgeColor,
+                        contentColor = Color.White
+                    ) {
+                        Text(
+                            text = conversation.unreadCount.toString(),
+                            fontWeight = FontWeight.Bold
+                        )
                     }
                 }
                 if (conversation.isEncrypted && showEncryptionBadge) {

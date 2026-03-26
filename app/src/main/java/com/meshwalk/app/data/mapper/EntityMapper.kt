@@ -44,7 +44,11 @@ object EntityMapper {
         isIncoming = isIncoming,
         hopCount = hopCount,
         expiresAt = expiresAt,
-        isDelayed = isDelayed
+        isDelayed = isDelayed,
+        reactions = parseReactionsJson(reactionsJson),
+        replyToMessageId = replyToMessageId?.takeIf { it.isNotEmpty() },
+        replyToPreview = replyToPreview?.takeIf { it.isNotEmpty() },
+        isPinned = isPinned
     )
 
     fun MeshMessage.toEntity() = MessageEntity(
@@ -64,7 +68,11 @@ object EntityMapper {
         isIncoming = isIncoming,
         hopCount = hopCount,
         expiresAt = expiresAt,
-        isDelayed = isDelayed
+        isDelayed = isDelayed,
+        reactionsJson = serializeReactionsJson(reactions),
+        replyToMessageId = replyToMessageId ?: "",
+        replyToPreview = replyToPreview ?: "",
+        isPinned = isPinned
     )
 
     // -- Conversation --
@@ -78,7 +86,9 @@ object EntityMapper {
         lastMessageAt = lastMessageAt,
         lastMessagePreview = lastMessagePreview,
         unreadCount = unreadCount,
-        isEncrypted = isEncrypted
+        isEncrypted = isEncrypted,
+        nickname = nickname?.takeIf { it.isNotEmpty() },
+        isFavorite = isFavorite
     )
 
     fun Conversation.toEntity() = ConversationEntity(
@@ -91,7 +101,9 @@ object EntityMapper {
         lastMessageAt = lastMessageAt,
         lastMessagePreview = lastMessagePreview,
         unreadCount = unreadCount,
-        isEncrypted = isEncrypted
+        isEncrypted = isEncrypted,
+        nickname = nickname ?: "",
+        isFavorite = isFavorite
     )
 
     // -- Peer --
@@ -170,6 +182,25 @@ object EntityMapper {
         version = version,
         maxMembers = maxMembers
     )
+
+    // -- Reactions JSON helpers --
+    private fun parseReactionsJson(json: String): Map<String, String> {
+        if (json.isEmpty()) return emptyMap()
+        return try {
+            val obj = JSONObject(json)
+            val map = mutableMapOf<String, String>()
+            obj.keys().forEach { key -> map[key] = obj.getString(key) }
+            map
+        } catch (e: Exception) {
+            Timber.w(e, "Failed to parse reactions JSON")
+            emptyMap()
+        }
+    }
+
+    fun serializeReactionsJson(reactions: Map<String, String>): String {
+        if (reactions.isEmpty()) return ""
+        return JSONObject(reactions).toString()
+    }
 
     // -- JSON helpers with malformed data protection --
     private fun parseJsonStringList(json: String): List<String> {

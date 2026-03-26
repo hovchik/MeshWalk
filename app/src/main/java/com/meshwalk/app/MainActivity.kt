@@ -13,6 +13,7 @@ import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.meshwalk.app.domain.model.DarkModeSetting
 import com.meshwalk.app.domain.repository.SettingsRepository
 import com.meshwalk.app.mesh.service.MeshForegroundService
 import com.meshwalk.app.ui.MeshWalkApp
@@ -40,7 +41,11 @@ class MainActivity : FragmentActivity() {
         requestPermissions()
 
         setContent {
-            MeshWalkTheme {
+            val darkModeSetting by remember {
+                settingsRepository.observeSettings().map { it.darkMode }
+            }.collectAsState(initial = DarkModeSetting.SYSTEM)
+
+            MeshWalkTheme(darkModeSetting = darkModeSetting) {
                 val fingerprintEnabled by remember {
                     settingsRepository.observeSettings().map { it.fingerprintLockEnabled }
                 }.collectAsState(initial = false)

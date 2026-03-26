@@ -18,7 +18,19 @@ data class AppSettings(
     val maxRelayHops: Int = 7,
     val groupMessageHistoryCount: Int = 50,
     val fingerprintLockEnabled: Boolean = false,
-    val networkGraphRefreshSeconds: Int = 5
+    val networkGraphRefreshSeconds: Int = 5,
+    /** Battery-aware mesh: reduce scan frequency when battery is low. */
+    val batteryAwareMeshEnabled: Boolean = true,
+    /** Battery threshold (%) below which scan switches to BATTERY_SAVER mode. */
+    val lowBatteryThresholdPercent: Int = 20,
+    /** Show signal strength indicators per peer. */
+    val showSignalStrength: Boolean = true,
+    /** Enable haptic feedback on key interactions. */
+    val hapticFeedbackEnabled: Boolean = true,
+    /** Auto-retry failed messages on reconnect. */
+    val autoRetryFailedMessages: Boolean = true,
+    /** Enable read receipts. */
+    val readReceiptsEnabled: Boolean = true
 )
 
 /**

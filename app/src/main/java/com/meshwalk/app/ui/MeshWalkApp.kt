@@ -72,6 +72,7 @@ fun MeshWalkApp(mainViewModel: MainViewModel = hiltViewModel()) {
     val identity by mainViewModel.identity.collectAsState()
     val meshStatus by mainViewModel.meshStatus.collectAsState()
     val nearestPeer by mainViewModel.nearestPeer.collectAsState()
+    val totalUnreadCount by mainViewModel.totalUnreadCount.collectAsState()
 
     Scaffold(
         topBar = {
@@ -92,10 +93,23 @@ fun MeshWalkApp(mainViewModel: MainViewModel = hiltViewModel()) {
 
                         NavigationBarItem(
                             icon = {
-                                Icon(
-                                    if (selected) item.selectedIcon else item.unselectedIcon,
-                                    contentDescription = item.label
-                                )
+                                if (item == BottomNavItem.Chats && totalUnreadCount > 0) {
+                                    BadgedBox(
+                                        badge = {
+                                            Badge { Text(totalUnreadCount.toString()) }
+                                        }
+                                    ) {
+                                        Icon(
+                                            if (selected) item.selectedIcon else item.unselectedIcon,
+                                            contentDescription = item.label
+                                        )
+                                    }
+                                } else {
+                                    Icon(
+                                        if (selected) item.selectedIcon else item.unselectedIcon,
+                                        contentDescription = item.label
+                                    )
+                                }
                             },
                             label = { Text(item.label) },
                             selected = selected,

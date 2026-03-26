@@ -10,6 +10,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
+import androidx.core.app.RemoteInput
 import androidx.core.content.ContextCompat
 import com.meshwalk.app.MainActivity
 import com.meshwalk.app.R
@@ -23,7 +24,8 @@ import javax.inject.Singleton
  *
  * Creates a dedicated high-importance notification channel for messages
  * (separate from the low-importance foreground service channel) and
- * posts per-conversation notifications with sender name and message preview.
+ * posts per-conversation notifications with sender name, message preview,
+ * quick-reply action, and predefined quick message buttons.
  */
 @Singleton
 class MessageNotificationManager @Inject constructor(
@@ -42,18 +44,14 @@ class MessageNotificationManager @Inject constructor(
     }
 
     /**
-     * Show a notification for a received message.
-     *
-     * @param conversationId Used to generate a stable notification ID per conversation.
-     * @param senderName Display name of the sender (or truncated nodeId).
-     * @param messagePreview Text preview of the message.
-     * @param isGroupMessage Whether this is a group message.
+     * Show a notification for a received message with quick reply action.
      */
     fun showMessageNotification(
         conversationId: String,
         senderName: String,
         messagePreview: String,
-        isGroupMessage: Boolean = false
+        isGroupMessage: Boolean = false,
+        peerNodeId: String = ""
     ) {
         if (!hasNotificationPermission()) {
             Timber.d("Notification permission not granted, skipping message notification")
@@ -62,6 +60,7 @@ class MessageNotificationManager @Inject constructor(
 
         val notificationId = BASE_NOTIFICATION_ID + conversationId.hashCode().and(0x7FFF)
 
+        // Main tap intent - opens the chat
         val intent = Intent(context, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
             putExtra("conversationId", conversationId)
@@ -74,7 +73,8 @@ class MessageNotificationManager @Inject constructor(
         )
 
         val title = if (isGroupMessage) "Group message from $senderName" else senderName
-        val notification = NotificationCompat.Builder(context, MESSAGE_CHANNEL_ID)
+
+        val builder = NotificationCompat.Builder(context, MESSAGE_CHANNEL_ID)
             .setSmallIcon(R.mipmap.ic_launcher)
             .setContentTitle(title)
             .setContentText(messagePreview)
@@ -84,17 +84,92 @@ class MessageNotificationManager @Inject constructor(
             .setContentIntent(pendingIntent)
             .setAutoCancel(true)
             .setGroup(GROUP_KEY)
+
+        // Quick reply action (inline reply from notification)
+        val replyRemoteInput = RemoteInput.Builder(QuickReplyReceiver.KEY_QUICK_REPLY)
+            .setLabel("Type a reply...")
             .build()
 
+        val replyIntent = Intent(context, QuickReplyReceiver::class.java).apply {
+            action = QuickReplyReceiver.ACTION_QUICK_REPLY
+            putExtra(QuickReplyReceiver.EXTRA_CONVERSATION_ID, conversationId)
+            putExtra(QuickReplyReceiver.EXTRA_PEER_NODE_ID, peerNodeId)
+        }
+        val replyPendingIntent = PendingIntent.getBroadcast(
+            context,
+            notificationId + 10000,
+            replyIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
+        )
+
+        val replyAction = NotificationCompat.Action.Builder(
+            R.mipmap.ic_launcher,
+            "Reply",
+            replyPendingIntent
+        ).addRemoteInput(replyRemoteInput).build()
+
+        builder.addAction(replyAction)
+
+        // Predefined quick messages
+        addQuickMessageAction(builder, conversationId, peerNodeId, notificationId, "I'm OK", 1)
+        addQuickMessageAction(builder, conversationId, peerNodeId, notificationId, "Need help", 2)
+
         try {
-            NotificationManagerCompat.from(context).notify(notificationId, notification)
+            NotificationManagerCompat.from(context).notify(notificationId, builder.build())
             Timber.d("Posted message notification for conversation ${conversationId.take(8)}")
         } catch (e: SecurityException) {
             Timber.w(e, "SecurityException posting notification")
         }
 
-        // Post summary notification for grouping when multiple conversations have messages
         postSummaryNotification()
+    }
+
+    private fun addQuickMessageAction(
+        builder: NotificationCompat.Builder,
+        conversationId: String,
+        peerNodeId: String,
+        notificationId: Int,
+        quickText: String,
+        offset: Int
+    ) {
+        val quickIntent = Intent(context, QuickReplyReceiver::class.java).apply {
+            action = QuickReplyReceiver.ACTION_QUICK_REPLY
+            putExtra(QuickReplyReceiver.EXTRA_CONVERSATION_ID, conversationId)
+            putExtra(QuickReplyReceiver.EXTRA_PEER_NODE_ID, peerNodeId)
+            // Embed the quick message as a RemoteInput result
+            putExtra("quick_text", quickText)
+        }
+
+        // For predefined messages, we use a direct PendingIntent that includes
+        // the text in the bundle, simulating a RemoteInput result.
+        val bundle = android.os.Bundle().apply {
+            putCharSequence(QuickReplyReceiver.KEY_QUICK_REPLY, quickText)
+        }
+        val clipIntent = Intent(context, QuickReplyReceiver::class.java).apply {
+            action = QuickReplyReceiver.ACTION_QUICK_REPLY
+            putExtra(QuickReplyReceiver.EXTRA_CONVERSATION_ID, conversationId)
+            putExtra(QuickReplyReceiver.EXTRA_PEER_NODE_ID, peerNodeId)
+        }
+        RemoteInput.addResultsToIntent(
+            arrayOf(RemoteInput.Builder(QuickReplyReceiver.KEY_QUICK_REPLY).build()),
+            clipIntent,
+            bundle
+        )
+
+        val quickPendingIntent = PendingIntent.getBroadcast(
+            context,
+            notificationId + 20000 + offset,
+            clipIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
+        )
+
+        builder.addAction(
+            NotificationCompat.Action.Builder(
+                R.mipmap.ic_launcher,
+                quickText,
+                quickPendingIntent
+            ).build()
+        )
     }
 
     /**

@@ -68,6 +68,21 @@ interface MessageDao {
 
     @Query("DELETE FROM messages WHERE expiresAt IS NOT NULL AND expiresAt < :now")
     suspend fun deleteExpired(now: Long)
+
+    @Query("UPDATE messages SET reactionsJson = :reactionsJson WHERE messageId = :messageId")
+    suspend fun updateReactions(messageId: String, reactionsJson: String)
+
+    @Query("UPDATE messages SET isPinned = :isPinned WHERE messageId = :messageId")
+    suspend fun updatePinned(messageId: String, isPinned: Boolean)
+
+    @Query("SELECT * FROM messages WHERE isPinned = 1 AND conversationId = :conversationId ORDER BY timestamp DESC")
+    fun observePinnedMessages(conversationId: String): Flow<List<MessageEntity>>
+
+    @Query("SELECT * FROM messages WHERE conversationId = :conversationId AND contentText LIKE '%' || :query || '%' ORDER BY timestamp DESC")
+    suspend fun searchMessages(conversationId: String, query: String): List<MessageEntity>
+
+    @Query("SELECT * FROM messages WHERE contentText LIKE '%' || :query || '%' ORDER BY timestamp DESC LIMIT :limit")
+    suspend fun searchAllMessages(query: String, limit: Int = 100): List<MessageEntity>
 }
 
 @Dao
@@ -101,6 +116,15 @@ interface ConversationDao {
 
     @Query("UPDATE conversations SET title = :title WHERE conversationId = :id")
     suspend fun updateTitle(id: String, title: String)
+
+    @Query("UPDATE conversations SET nickname = :nickname WHERE conversationId = :id")
+    suspend fun updateNickname(id: String, nickname: String?)
+
+    @Query("UPDATE conversations SET isFavorite = :isFavorite WHERE conversationId = :id")
+    suspend fun updateFavorite(id: String, isFavorite: Boolean)
+
+    @Query("SELECT SUM(unreadCount) FROM conversations")
+    fun observeTotalUnreadCount(): Flow<Int?>
 }
 
 @Dao

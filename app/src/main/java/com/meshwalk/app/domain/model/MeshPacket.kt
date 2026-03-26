@@ -36,6 +36,7 @@ data class MeshPacket(
         const val FLAG_STORE_AND_FORWARD = 0x08
         const val FLAG_GROUP_MESSAGE = 0x10
         const val FLAG_KEY_EXCHANGE = 0x20
+        const val FLAG_READ_RECEIPT = 0x40
     }
 
     val isAckRequested: Boolean get() = flags and FLAG_ACK_REQUESTED != 0
@@ -44,6 +45,7 @@ data class MeshPacket(
     val isStoreAndForward: Boolean get() = flags and FLAG_STORE_AND_FORWARD != 0
     val isGroupMessage: Boolean get() = flags and FLAG_GROUP_MESSAGE != 0
     val isKeyExchange: Boolean get() = flags and FLAG_KEY_EXCHANGE != 0
+    val isReadReceipt: Boolean get() = flags and FLAG_READ_RECEIPT != 0
     val isExpired: Boolean get() = ttl <= 0
 
     /**
@@ -72,5 +74,7 @@ enum class PacketType {
     ROUTE_UPDATE,     // Routing table update
     GROUP_CONTROL,    // Group membership changes
     PING,             // Keepalive / reachability probe
-    STORE_FORWARD     // Store-and-forward delivery
+    STORE_FORWARD,    // Store-and-forward delivery
+    READ_RECEIPT,     // Read receipt notification
+    REACTION          // Message reaction
 }

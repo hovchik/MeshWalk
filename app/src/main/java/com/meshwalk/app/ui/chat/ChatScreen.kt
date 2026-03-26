@@ -1,9 +1,13 @@
 package com.meshwalk.app.ui.chat
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -73,7 +77,11 @@ class ChatViewModel @Inject constructor(
         val showEncryptionBadge: Boolean = true,
         val isGroupChat: Boolean = false,
         val groupMembers: List<GroupMember> = emptyList(),
-        val availablePeers: List<PeerNode> = emptyList()
+        val availablePeers: List<PeerNode> = emptyList(),
+        val pinnedMessages: List<MeshMessage> = emptyList(),
+        val searchResults: List<MeshMessage> = emptyList(),
+        val isSearching: Boolean = false,
+        val replyToMessage: MeshMessage? = null
     )
 
     private val _state = MutableStateFlow(UiState())
@@ -125,13 +133,20 @@ class ChatViewModel @Inject constructor(
             conversationRepo.clearUnread(conversationId)
         }
 
-        // Observe settings first, then messages (need settings for group history limit)
+        // Observe settings
         viewModelScope.launch {
             settingsRepo.observeSettings().collect { settings ->
                 _state.value = _state.value.copy(
                     showHopCount = settings.showHopCount,
                     showEncryptionBadge = settings.showEncryptionBadge
                 )
+            }
+        }
+
+        // Observe pinned messages
+        viewModelScope.launch {
+            messageRepo.observePinnedMessages(conversationId).collect { pinned ->
+                _state.value = _state.value.copy(pinnedMessages = pinned)
             }
         }
 
@@ -257,6 +272,66 @@ class ChatViewModel @Inject constructor(
     fun clearSendError() {
         _state.value = _state.value.copy(sendError = null)
     }
+
+    fun addReaction(message: MeshMessage, emoji: String) {
+        viewModelScope.launch {
+            val selfId = _state.value.selfNodeId
+            val updated = message.reactions.toMutableMap()
+            if (updated[selfId] == emoji) updated.remove(selfId) else updated[selfId] = emoji
+            messageRepo.updateReactions(message.messageId, updated)
+        }
+    }
+
+    fun togglePin(message: MeshMessage) {
+        viewModelScope.launch {
+            messageRepo.togglePinned(message.messageId, !message.isPinned)
+        }
+    }
+
+    fun setReplyTo(message: MeshMessage?) {
+        _state.value = _state.value.copy(replyToMessage = message)
+    }
+
+    fun sendWithReply(text: String) {
+        if (text.isBlank()) return
+        val replyTo = _state.value.replyToMessage
+        viewModelScope.launch {
+            _state.value = _state.value.copy(sendError = null, replyToMessage = null)
+            try {
+                val sentMsg = if (_state.value.isGroupChat) {
+                    sendGroupMessage(conversationId, text.trim(), _state.value.selfNodeId)
+                } else {
+                    sendMessage(conversationId, peerNodeId, text.trim(), _state.value.selfNodeId)
+                }
+                // If replying, update the sent message with reply-to fields
+                if (replyTo != null) {
+                    val preview = when (val c = replyTo.content) {
+                        is MessageContent.Text -> c.text.take(80)
+                        is MessageContent.SystemEvent -> c.event.take(80)
+                    }
+                    val updated = sentMsg.copy(
+                        replyToMessageId = replyTo.messageId,
+                        replyToPreview = preview
+                    )
+                    messageRepo.saveMessage(updated)
+                }
+            } catch (e: Exception) {
+                _state.value = _state.value.copy(sendError = e.message ?: "Failed to send")
+            }
+        }
+    }
+
+    fun searchMessages(query: String) {
+        if (query.isBlank()) {
+            _state.value = _state.value.copy(searchResults = emptyList(), isSearching = false)
+            return
+        }
+        viewModelScope.launch {
+            _state.value = _state.value.copy(isSearching = true)
+            val results = messageRepo.searchMessages(conversationId, query)
+            _state.value = _state.value.copy(searchResults = results, isSearching = false)
+        }
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -271,6 +346,10 @@ fun ChatScreen(
     var messageText by remember { mutableStateOf(TextFieldValue("")) }
     var showGroupSettings by remember { mutableStateOf(false) }
     var showEmojiPicker by remember { mutableStateOf(false) }
+    var showSearch by remember { mutableStateOf(false) }
+    var searchQuery by remember { mutableStateOf("") }
+    var showPinnedBanner by remember { mutableStateOf(false) }
+    var contextMenuMessage by remember { mutableStateOf<MeshMessage?>(null) }
     val listState = rememberLazyListState()
     val snackbarHostState = remember { SnackbarHostState() }
     val keyboardController = LocalSoftwareKeyboardController.current
@@ -349,6 +428,9 @@ fun ChatScreen(
                     }
                 },
                 actions = {
+                    IconButton(onClick = { showSearch = !showSearch }) {
+                        Icon(Icons.Filled.Search, "Search messages")
+                    }
                     if (state.isGroupChat) {
                         IconButton(onClick = {
                             viewModel.loadAvailablePeers()
@@ -374,6 +456,96 @@ fun ChatScreen(
                 .navigationBarsPadding()
                 .imePadding()
         ) {
+            // Search bar
+            AnimatedVisibility(visible = showSearch) {
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = {
+                        searchQuery = it
+                        viewModel.searchMessages(it)
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 4.dp),
+                    placeholder = { Text("Search messages...") },
+                    leadingIcon = { Icon(Icons.Filled.Search, null, modifier = Modifier.size(20.dp)) },
+                    trailingIcon = {
+                        IconButton(onClick = {
+                            showSearch = false
+                            searchQuery = ""
+                            viewModel.searchMessages("")
+                        }) { Icon(Icons.Filled.Close, "Close search", modifier = Modifier.size(20.dp)) }
+                    },
+                    singleLine = true,
+                    shape = RoundedCornerShape(24.dp)
+                )
+            }
+
+            // Search results
+            if (showSearch && state.searchResults.isNotEmpty()) {
+                Surface(
+                    tonalElevation = 2.dp,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp)
+                ) {
+                    Column(modifier = Modifier.padding(8.dp)) {
+                        Text("${state.searchResults.size} results", style = MaterialTheme.typography.labelSmall)
+                        state.searchResults.take(5).forEach { msg ->
+                            val preview = when (val c = msg.content) {
+                                is MessageContent.Text -> c.text.take(60)
+                                is MessageContent.SystemEvent -> c.event.take(60)
+                            }
+                            Text(
+                                text = "${TimeUtils.formatTimestamp(msg.timestamp)}: $preview",
+                                style = MaterialTheme.typography.bodySmall,
+                                maxLines = 1,
+                                modifier = Modifier.padding(vertical = 2.dp)
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Pinned messages banner
+            if (state.pinnedMessages.isNotEmpty()) {
+                Surface(
+                    tonalElevation = 2.dp,
+                    color = MaterialTheme.colorScheme.secondaryContainer,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { showPinnedBanner = !showPinnedBanner }
+                ) {
+                    Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Filled.PushPin, null, modifier = Modifier.size(16.dp),
+                                tint = MaterialTheme.colorScheme.onSecondaryContainer)
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                "${state.pinnedMessages.size} pinned message${if (state.pinnedMessages.size > 1) "s" else ""}",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer
+                            )
+                        }
+                        AnimatedVisibility(visible = showPinnedBanner) {
+                            Column(modifier = Modifier.padding(top = 4.dp)) {
+                                state.pinnedMessages.forEach { pinned ->
+                                    val preview = when (val c = pinned.content) {
+                                        is MessageContent.Text -> c.text.take(80)
+                                        is MessageContent.SystemEvent -> c.event.take(80)
+                                    }
+                                    Text(
+                                        text = preview,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                        maxLines = 1,
+                                        modifier = Modifier.padding(vertical = 2.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             // Message list — fills available space above input bar
             LazyColumn(
                 modifier = Modifier
@@ -401,8 +573,62 @@ fun ChatScreen(
                         onRetry = if (!message.isIncoming && message.deliveryStatus == DeliveryStatus.PENDING &&
                             System.currentTimeMillis() - message.timestamp > 10_000L) {
                             { viewModel.resendMessage(message) }
-                        } else null
+                        } else null,
+                        onLongPress = { contextMenuMessage = message }
                     )
+                }
+            }
+
+            // Quick message chips
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp, vertical = 2.dp)
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                listOf("I'm OK", "Need help", "On my way", "Yes", "No").forEach { quick ->
+                    SuggestionChip(
+                        onClick = {
+                            viewModel.send(quick)
+                        },
+                        label = { Text(quick, style = MaterialTheme.typography.labelSmall) }
+                    )
+                }
+            }
+
+            // Reply-to preview bar
+            state.replyToMessage?.let { replyMsg ->
+                Surface(
+                    tonalElevation = 2.dp,
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .width(3.dp)
+                                .height(32.dp)
+                                .background(MaterialTheme.colorScheme.primary)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Reply to", style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary)
+                            val preview = when (val c = replyMsg.content) {
+                                is MessageContent.Text -> c.text.take(60)
+                                is MessageContent.SystemEvent -> c.event.take(60)
+                            }
+                            Text(preview, style = MaterialTheme.typography.bodySmall,
+                                maxLines = 1, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        IconButton(onClick = { viewModel.setReplyTo(null) }) {
+                            Icon(Icons.Filled.Close, "Cancel reply", modifier = Modifier.size(18.dp))
+                        }
+                    }
                 }
             }
 
@@ -441,7 +667,11 @@ fun ChatScreen(
                         Spacer(modifier = Modifier.width(8.dp))
                         FilledIconButton(
                             onClick = {
-                                viewModel.send(messageText.text)
+                                if (state.replyToMessage != null) {
+                                    viewModel.sendWithReply(messageText.text)
+                                } else {
+                                    viewModel.send(messageText.text)
+                                }
                                 messageText = TextFieldValue("")
                                 showEmojiPicker = false
                             },
@@ -480,6 +710,74 @@ fun ChatScreen(
             },
             onAddMember = { nodeId ->
                 viewModel.addMember(nodeId)
+            }
+        )
+    }
+
+    // Message context menu (long-press)
+    contextMenuMessage?.let { msg ->
+        val reactionEmojis = listOf("\uD83D\uDC4D", "\u2764\uFE0F", "\uD83D\uDE02", "\uD83D\uDE2E", "\uD83D\uDE22", "\uD83D\uDE4F")
+        AlertDialog(
+            onDismissRequest = { contextMenuMessage = null },
+            title = { Text("Message Actions") },
+            text = {
+                Column {
+                    // Reaction row
+                    Text("React", style = MaterialTheme.typography.labelMedium)
+                    Row(
+                        modifier = Modifier.padding(vertical = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        reactionEmojis.forEach { emoji ->
+                            Surface(
+                                onClick = {
+                                    viewModel.addReaction(msg, emoji)
+                                    contextMenuMessage = null
+                                },
+                                shape = RoundedCornerShape(8.dp),
+                                color = if (msg.reactions[state.selfNodeId] == emoji)
+                                    MaterialTheme.colorScheme.primaryContainer
+                                else MaterialTheme.colorScheme.surfaceVariant
+                            ) {
+                                Text(
+                                    emoji,
+                                    fontSize = 24.sp,
+                                    modifier = Modifier.padding(8.dp)
+                                )
+                            }
+                        }
+                    }
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                    // Reply
+                    TextButton(
+                        onClick = {
+                            viewModel.setReplyTo(msg)
+                            contextMenuMessage = null
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Filled.Reply, null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Reply")
+                        Spacer(modifier = Modifier.weight(1f))
+                    }
+                    // Pin/Unpin
+                    TextButton(
+                        onClick = {
+                            viewModel.togglePin(msg)
+                            contextMenuMessage = null
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Filled.PushPin, null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(if (msg.isPinned) "Unpin" else "Pin")
+                        Spacer(modifier = Modifier.weight(1f))
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { contextMenuMessage = null }) { Text("Close") }
             }
         )
     }
@@ -632,6 +930,7 @@ private fun EmojiPickerGrid(onEmojiSelected: (String) -> Unit) {
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun MessageBubble(
     message: MeshMessage,
@@ -639,7 +938,8 @@ private fun MessageBubble(
     showHopCount: Boolean = false,
     senderName: String? = null,
     onResend: (() -> Unit)? = null,
-    onRetry: (() -> Unit)? = null
+    onRetry: (() -> Unit)? = null,
+    onLongPress: (() -> Unit)? = null
 ) {
     val alignment = if (isOutgoing) Alignment.CenterEnd else Alignment.CenterStart
     val bubbleColor = if (message.isDelayed && message.isIncoming) {
@@ -663,13 +963,20 @@ private fun MessageBubble(
         bottomEnd = if (isOutgoing) 4.dp else 16.dp
     )
 
+    Column {
     Box(
         modifier = Modifier
             .fillMaxWidth()
             .padding(
                 start = if (isOutgoing) 48.dp else 0.dp,
                 end = if (isOutgoing) 0.dp else 48.dp
-            ),
+            )
+            .let { mod ->
+                if (onLongPress != null) mod.combinedClickable(
+                    onClick = {},
+                    onLongClick = onLongPress
+                ) else mod
+            },
         contentAlignment = alignment
     ) {
         Surface(
@@ -678,6 +985,38 @@ private fun MessageBubble(
             tonalElevation = 1.dp
         ) {
             Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+                // Reply preview
+                if (message.replyToPreview != null) {
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = if (isOutgoing) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
+                               else MaterialTheme.colorScheme.surface.copy(alpha = 0.5f)
+                    ) {
+                        Row(modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)) {
+                            Box(modifier = Modifier.width(2.dp).height(20.dp)
+                                .background(MaterialTheme.colorScheme.primary))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = message.replyToPreview,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = textColor.copy(alpha = 0.7f),
+                                maxLines = 1
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(4.dp))
+                }
+                // Pinned indicator
+                if (message.isPinned) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Filled.PushPin, null, modifier = Modifier.size(10.dp),
+                            tint = textColor.copy(alpha = 0.5f))
+                        Spacer(modifier = Modifier.width(3.dp))
+                        Text("Pinned", style = MaterialTheme.typography.labelSmall,
+                            color = textColor.copy(alpha = 0.5f))
+                    }
+                    Spacer(modifier = Modifier.height(2.dp))
+                }
                 if (message.isDelayed && message.isIncoming) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(
@@ -793,6 +1132,33 @@ private fun MessageBubble(
             }
         }
     }
+    // Reactions display below bubble
+    if (message.reactions.isNotEmpty()) {
+        Row(
+            modifier = Modifier
+                .padding(
+                    start = if (isOutgoing) 48.dp else 4.dp,
+                    end = if (isOutgoing) 4.dp else 48.dp
+                ),
+            horizontalArrangement = if (isOutgoing) Arrangement.End else Arrangement.Start
+        ) {
+            val grouped = message.reactions.values.groupingBy { it }.eachCount()
+            grouped.forEach { (emoji, count) ->
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                    modifier = Modifier.padding(end = 4.dp)
+                ) {
+                    Text(
+                        text = if (count > 1) "$emoji $count" else emoji,
+                        style = MaterialTheme.typography.labelSmall,
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                    )
+                }
+            }
+        }
+    }
+    } // close outer Column
 }
 
 @Composable

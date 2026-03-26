@@ -37,6 +37,10 @@
             android:name=".mesh.service.MeshForegroundService"
             android:exported="false"
             android:foregroundServiceType="connectedDevice" />
+
+        <receiver
+            android:name=".mesh.inbox.QuickReplyReceiver"
+            android:exported="false" />
     </application>
 
 </manifest>
