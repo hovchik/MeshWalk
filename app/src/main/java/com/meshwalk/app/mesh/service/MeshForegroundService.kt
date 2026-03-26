@@ -128,10 +128,10 @@ class MeshForegroundService : Service() {
 
     override fun onDestroy() {
         if (meshStarted) {
-            // Use withTimeoutOrNull to avoid blocking the main thread indefinitely.
-            // If cleanup takes longer than 3 seconds, the scope cancellation below
-            // will still tear everything down.
-            runBlocking {
+            // Run cleanup on IO dispatcher to avoid blocking the main thread
+            // (which could trigger an ANR). The 3-second timeout ensures
+            // onDestroy returns promptly even if stopMesh hangs.
+            runBlocking(Dispatchers.IO) {
                 withTimeoutOrNull(3_000) {
                     transportManager.stopMesh()
                     routingEngine.stop()
