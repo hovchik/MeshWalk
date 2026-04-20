@@ -1,5 +1,9 @@
 package com.meshwalk.app.ui.settings
 
+import android.content.Intent
+import android.net.Uri
+import android.os.PowerManager
+import android.provider.Settings
 import androidx.biometric.BiometricManager
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -289,6 +293,18 @@ fun SettingsScreen(
 
         // Battery
         SectionHeader("Battery & Power")
+        SwitchItem(
+            title = "Run in background",
+            subtitle = "Keep mesh service running so messages send and receive even when the app is closed",
+            checked = state.settings.autoStartMesh,
+            onToggle = {
+                val enabling = !state.settings.autoStartMesh
+                viewModel.updateSettings { it.copy(autoStartMesh = enabling) }
+                if (enabling) {
+                    requestIgnoreBatteryOptimizations(context)
+                }
+            }
+        )
         SwitchItem(
             title = "Battery-aware mesh",
             subtitle = "Reduce scan frequency when battery is low",
@@ -1057,6 +1073,17 @@ private fun SubscriptionDetailRow(
             color = MaterialTheme.colorScheme.onSurface
         )
     }
+}
+
+private fun requestIgnoreBatteryOptimizations(context: android.content.Context) {
+    val powerManager = context.getSystemService(android.content.Context.POWER_SERVICE) as? PowerManager
+    val packageName = context.packageName
+    if (powerManager == null || powerManager.isIgnoringBatteryOptimizations(packageName)) return
+    val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+        data = Uri.parse("package:$packageName")
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+    runCatching { context.startActivity(intent) }
 }
 
 @Composable

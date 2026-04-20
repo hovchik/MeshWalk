@@ -1,6 +1,7 @@
 package com.meshwalk.app
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -22,6 +23,7 @@ import com.meshwalk.app.ui.MeshWalkApp
 import com.meshwalk.app.ui.lock.BiometricLockScreen
 import com.meshwalk.app.ui.theme.MeshWalkTheme
 import dagger.hilt.android.AndroidEntryPoint
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -35,8 +37,8 @@ class MainActivity : FragmentActivity() {
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { _ ->
-        // Start service regardless — transports handle missing permissions gracefully
-        startMeshService()
+        // Transports handle missing permissions gracefully; startup respects the background toggle
+        observeBackgroundWorkPreference()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -102,7 +104,22 @@ class MainActivity : FragmentActivity() {
         if (needed.isNotEmpty()) {
             permissionLauncher.launch(needed.toTypedArray())
         } else {
-            startMeshService()
+            observeBackgroundWorkPreference()
+        }
+    }
+
+    private var backgroundWorkObserverStarted = false
+
+    private fun observeBackgroundWorkPreference() {
+        if (backgroundWorkObserverStarted) return
+        backgroundWorkObserverStarted = true
+        lifecycleScope.launch {
+            settingsRepository.observeSettings()
+                .map { it.autoStartMesh }
+                .distinctUntilChanged()
+                .collect { enabled ->
+                    if (enabled) startMeshService() else stopMeshService()
+                }
         }
     }
 
@@ -124,5 +141,9 @@ class MainActivity : FragmentActivity() {
 
     private fun startMeshService() {
         startForegroundService(MeshForegroundService.startIntent(this))
+    }
+
+    private fun stopMeshService() {
+        stopService(Intent(this, MeshForegroundService::class.java))
     }
 }
