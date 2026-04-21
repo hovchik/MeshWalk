@@ -33,7 +33,16 @@ object DatabaseModule {
             MeshWalkDatabase::class.java,
             MeshWalkDatabase.DATABASE_NAME
         )
-            .addMigrations(MeshWalkDatabase.MIGRATION_1_2, MeshWalkDatabase.MIGRATION_2_3, MeshWalkDatabase.MIGRATION_3_4, MeshWalkDatabase.MIGRATION_4_5, MeshWalkDatabase.MIGRATION_5_6, MeshWalkDatabase.MIGRATION_6_7, MeshWalkDatabase.MIGRATION_7_8)
+            .addMigrations(
+                MeshWalkDatabase.MIGRATION_1_2,
+                MeshWalkDatabase.MIGRATION_2_3,
+                MeshWalkDatabase.MIGRATION_3_4,
+                MeshWalkDatabase.MIGRATION_4_5,
+                MeshWalkDatabase.MIGRATION_5_6,
+                MeshWalkDatabase.MIGRATION_6_7,
+                MeshWalkDatabase.MIGRATION_7_8,
+                MeshWalkDatabase.MIGRATION_8_9
+            )
             .fallbackToDestructiveMigration(dropAllTables = false)
             .build()
     }
@@ -47,6 +56,12 @@ object DatabaseModule {
     @Provides fun provideSenderKeyDao(db: MeshWalkDatabase): SenderKeyDao = db.senderKeyDao()
     @Provides fun provideBlockedPeerDao(db: MeshWalkDatabase): BlockedPeerDao = db.blockedPeerDao()
     @Provides fun provideGroupArchiveDao(db: MeshWalkDatabase): GroupArchiveDao = db.groupArchiveDao()
+    @Provides fun provideDropZoneDao(db: MeshWalkDatabase): DropZoneDao = db.dropZoneDao()
+    @Provides fun provideBulletinPostDao(db: MeshWalkDatabase): BulletinPostDao = db.bulletinPostDao()
+    @Provides fun provideReputationTokenDao(db: MeshWalkDatabase): ReputationTokenDao = db.reputationTokenDao()
+    @Provides fun provideSignalSampleDao(db: MeshWalkDatabase): SignalSampleDao = db.signalSampleDao()
+    @Provides fun providePeerStatsDao(db: MeshWalkDatabase): PeerStatsDao = db.peerStatsDao()
+    @Provides fun provideRelayCounterDao(db: MeshWalkDatabase): RelayCounterDao = db.relayCounterDao()
 }
 
 @Module

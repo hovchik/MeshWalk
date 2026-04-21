@@ -30,7 +30,9 @@ data class AppSettings(
     /** Auto-retry failed messages on reconnect. */
     val autoRetryFailedMessages: Boolean = true,
     /** Enable read receipts. */
-    val readReceiptsEnabled: Boolean = true
+    val readReceiptsEnabled: Boolean = true,
+    /** Toggles for opt-in experimental features. */
+    val experimental: ExperimentalFeatures = ExperimentalFeatures()
 )
 
 /**
