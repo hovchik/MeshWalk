@@ -7,6 +7,7 @@ import com.meshwalk.app.crypto.session.SessionManager
 import com.meshwalk.app.domain.model.DeliveryStatus
 import com.meshwalk.app.domain.model.MeshMessage
 import com.meshwalk.app.domain.model.MeshPacket
+import com.meshwalk.app.domain.model.ReactionEnvelope
 import com.meshwalk.app.domain.repository.MessageRepository
 import com.meshwalk.app.domain.repository.PeerRepository
 import com.meshwalk.app.domain.usecase.MeshOutboxPort
@@ -257,6 +258,41 @@ class MeshOutbox @Inject constructor(
             key = groupKeyManager.getSendingKey(groupId, senderNodeId)
         }
         return key
+    }
+
+    override suspend fun enqueueReaction(
+        reaction: ReactionEnvelope,
+        recipientNodeId: String,
+        senderNodeId: String
+    ) {
+        if (recipientNodeId == senderNodeId) {
+            // Reacting to our own message — nothing to send over the wire.
+            return
+        }
+        val signingKey = keyStorage.getSigningPrivateKey(senderNodeId)
+        if (signingKey == null) {
+            Timber.w("Cannot send reaction: signing key not found for $senderNodeId")
+            return
+        }
+
+        try {
+            ensureSession(senderNodeId, recipientNodeId)
+
+            val packet = envelopeManager.encryptReactionForPeer(
+                reaction = reaction,
+                senderNodeId = senderNodeId,
+                recipientNodeId = recipientNodeId,
+                signingPrivateKey = signingKey
+            )
+            val sent = routingEngine.sendPacket(packet)
+            if (!sent) {
+                Timber.d("Reaction packet ${packet.packetId.take(8)} queued for later delivery")
+            }
+        } catch (e: SessionNotReadyException) {
+            Timber.w("Session not ready to send reaction to ${recipientNodeId.take(8)}: ${e.message}")
+        } catch (e: Exception) {
+            Timber.e(e, "Failed to encrypt/send reaction for message ${reaction.messageId.take(8)}")
+        }
     }
 
     override suspend fun enqueueGroupMessage(

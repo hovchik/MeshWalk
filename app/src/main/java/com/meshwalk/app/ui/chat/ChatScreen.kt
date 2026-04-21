@@ -277,8 +277,31 @@ class ChatViewModel @Inject constructor(
         viewModelScope.launch {
             val selfId = _state.value.selfNodeId
             val updated = message.reactions.toMutableMap()
-            if (updated[selfId] == emoji) updated.remove(selfId) else updated[selfId] = emoji
+            val isRemoval = updated[selfId] == emoji
+            if (isRemoval) updated.remove(selfId) else updated[selfId] = emoji
             messageRepo.updateReactions(message.messageId, updated)
+
+            // Notify the original message sender about our reaction so it
+            // reaches them even when they're not currently viewing the chat.
+            // No packet is sent when reacting to our own message.
+            if (message.senderNodeId.isNotBlank() && message.senderNodeId != selfId) {
+                try {
+                    meshOutbox.enqueueReaction(
+                        reaction = ReactionEnvelope(
+                            messageId = message.messageId,
+                            conversationId = message.conversationId,
+                            emoji = emoji,
+                            isRemoval = isRemoval
+                        ),
+                        recipientNodeId = message.senderNodeId,
+                        senderNodeId = selfId
+                    )
+                } catch (e: Exception) {
+                    _state.value = _state.value.copy(
+                        sendError = "Couldn't deliver reaction: ${e.message ?: "unknown error"}"
+                    )
+                }
+            }
         }
     }
 

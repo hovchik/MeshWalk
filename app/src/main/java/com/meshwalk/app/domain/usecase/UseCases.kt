@@ -167,6 +167,7 @@ interface CryptoManagerPort {
 interface MeshOutboxPort {
     suspend fun enqueueMessage(message: MeshMessage, recipientNodeId: String)
     suspend fun enqueueGroupMessage(message: MeshMessage, recipientNodeIds: List<String>, groupId: String)
+    suspend fun enqueueReaction(reaction: ReactionEnvelope, recipientNodeId: String, senderNodeId: String)
 }
 
 interface TransportManagerPort {

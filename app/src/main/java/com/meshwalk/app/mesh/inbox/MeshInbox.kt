@@ -65,6 +65,9 @@ class MeshInbox @Inject constructor(
                                 handleDirectMessage(packet, ourNodeId)
                             }
                         }
+                        PacketType.REACTION -> {
+                            handleReaction(packet, ourNodeId)
+                        }
                         else -> {
                             Timber.d("Ignoring packet type: ${packet.packetType}")
                         }
@@ -136,6 +139,62 @@ class MeshInbox @Inject constructor(
         )
 
         Timber.d("Received direct message from ${packet.sourceNodeId.take(8)}: ${preview.take(30)}")
+    }
+
+    private suspend fun handleReaction(
+        packet: com.meshwalk.app.domain.model.MeshPacket,
+        ourNodeId: String
+    ) {
+        // Reactions ride the same pairwise session as direct messages, so we
+        // must establish one if we haven't already.
+        if (!ensureSession(ourNodeId, packet.sourceNodeId)) {
+            throw SessionNotReadyException("Cannot establish session with ${packet.sourceNodeId.take(8)} for reaction")
+        }
+
+        val reaction = envelopeManager.decryptReactionFromPeer(packet, ourNodeId)
+        if (reaction == null) {
+            Timber.w("Failed to decrypt reaction from ${packet.sourceNodeId}")
+            return
+        }
+
+        val target = messageRepo.getMessageById(reaction.messageId)
+        if (target == null) {
+            Timber.d("Reaction for unknown message ${reaction.messageId.take(8)}, dropping")
+            return
+        }
+
+        // Merge the reactor's entry into the target message's reaction map.
+        val updated = target.reactions.toMutableMap()
+        if (reaction.isRemoval) {
+            updated.remove(packet.sourceNodeId)
+        } else {
+            updated[packet.sourceNodeId] = reaction.emoji
+        }
+        messageRepo.updateReactions(target.messageId, updated)
+
+        // Only the original sender of the reacted-to message gets notified.
+        // Relays and other recipients (e.g. other direct-session peers) should
+        // silently update their local state without a notification.
+        if (!target.isIncoming && target.senderNodeId == ourNodeId) {
+            val senderPeer = peerRepo.getPeer(packet.sourceNodeId)
+            val senderName = senderPeer?.displayName ?: packet.sourceNodeId.take(8)
+            val preview = when (val c = target.content) {
+                is MessageContent.Text -> c.text
+                is MessageContent.SystemEvent -> c.event
+            }.take(80)
+            notificationManager.showReactionNotification(
+                conversationId = target.conversationId,
+                senderName = senderName,
+                emoji = reaction.emoji,
+                messagePreview = preview,
+                isRemoval = reaction.isRemoval
+            )
+        }
+
+        Timber.d(
+            "Received reaction ${reaction.emoji} (remove=${reaction.isRemoval}) " +
+                "from ${packet.sourceNodeId.take(8)} on message ${reaction.messageId.take(8)}"
+        )
     }
 
     /**
