@@ -97,6 +97,10 @@ class MeshForegroundService : Service() {
 
                 routingEngine.start(identity.nodeId)
                 meshInbox.start(identity.nodeId, serviceScope)
+                // Start the outbox before the transport so its abandoned-packet
+                // collector is ready by the time the routing engine begins
+                // processing queued packets.
+                meshOutbox.start(serviceScope)
                 messageResendManager.start(identity.nodeId, serviceScope)
                 groupLifecycleManager.start(identity.nodeId, serviceScope)
                 transportManager.startMesh(advertisement)

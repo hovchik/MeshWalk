@@ -40,6 +40,11 @@ class TransportManager @Inject constructor(
     companion object {
         /** Magic byte prefix to distinguish advertisement payloads from regular mesh packets. */
         const val ADVERTISEMENT_MAGIC: Byte = 0x4D // 'M' for MeshWalk advertisement
+
+        /** Max attempts when delivering the node advertisement to a newly-connected peer. */
+        private const val ADVERTISEMENT_SEND_MAX_ATTEMPTS = 3
+        /** Delays between advertisement send attempts (ms). */
+        private val ADVERTISEMENT_SEND_RETRY_DELAYS_MS = longArrayOf(500L, 1_500L)
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -344,18 +349,12 @@ class TransportManager @Inject constructor(
 
                     // Send our advertisement to the newly connected peer so they get
                     // our publicExchangeKey (needed for session establishment).
+                    // This is retried a few times because a silently-dropped
+                    // advertisement leaves the peer unable to establish a
+                    // session — it would not know our exchange public key —
+                    // and no other path replenishes it until profile updates.
                     currentAdvertisement?.let { advert ->
-                        val endpointId = nodeEndpointMap[nodeId] ?: return@let
-                        val transport = endpointTransportMap[endpointId] ?: return@let
-                        val advertData = advert.serialize()
-                        // Prefix with a magic byte to distinguish from regular packets
-                        val payload = ByteArray(1 + advertData.size)
-                        payload[0] = ADVERTISEMENT_MAGIC
-                        advertData.copyInto(payload, 1)
-                        transport.sendData(endpointId, payload).onFailure {
-                            Timber.w("Failed to send advertisement to $nodeId")
-                        }
-                        Timber.d("Sent advertisement to $nodeId (exchangeKey included)")
+                        scope.launch { sendAdvertisementWithRetry(nodeId, advert) }
                     }
                 }
             }
@@ -436,6 +435,49 @@ class TransportManager @Inject constructor(
             else -> { /* handled by routing layer */ }
         }
         return false
+    }
+
+    /**
+     * Send our node advertisement (magic-prefixed) to a peer, retrying briefly
+     * on transient transport failures. Without the advertisement a peer
+     * cannot establish a pairwise session with us because they lack our
+     * public exchange key, so giving up after a single failed send would
+     * break messaging until the peer reconnects.
+     */
+    private suspend fun sendAdvertisementWithRetry(
+        nodeId: String,
+        advertisement: NodeAdvertisement
+    ) {
+        val advertData = advertisement.serialize()
+        val payload = ByteArray(1 + advertData.size)
+        payload[0] = ADVERTISEMENT_MAGIC
+        advertData.copyInto(payload, 1)
+
+        for (attempt in 1..ADVERTISEMENT_SEND_MAX_ATTEMPTS) {
+            val endpointId = nodeEndpointMap[nodeId]
+            val transport = endpointId?.let { endpointTransportMap[it] }
+            if (endpointId == null || transport == null) {
+                Timber.w("Advertisement send aborted: no endpoint for ${nodeId.take(8)}")
+                return
+            }
+            val result = transport.sendData(endpointId, payload)
+            if (result.isSuccess) {
+                Timber.d("Sent advertisement to ${nodeId.take(8)} on attempt $attempt (exchangeKey included)")
+                return
+            }
+            Timber.w(
+                "Advertisement send attempt $attempt/$ADVERTISEMENT_SEND_MAX_ATTEMPTS " +
+                    "failed for ${nodeId.take(8)}"
+            )
+            if (attempt < ADVERTISEMENT_SEND_MAX_ATTEMPTS) {
+                delay(ADVERTISEMENT_SEND_RETRY_DELAYS_MS[attempt - 1])
+            }
+        }
+        Timber.e(
+            "Failed to send advertisement to ${nodeId.take(8)} after " +
+                "$ADVERTISEMENT_SEND_MAX_ATTEMPTS attempts; peer will be unable to " +
+                "establish a session until they reconnect"
+        )
     }
 
     /**
