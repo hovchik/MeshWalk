@@ -156,7 +156,7 @@ class MeshInbox @Inject constructor(
 
         // The peer's exchange key arrives asynchronously via the advertisement
         // payload sent right after connection. Wait for it to arrive, using the
-        // same timeout as the outbox (5 seconds) to handle mesh network latency.
+        // same timeout as the outbox (10 seconds) to handle mesh network latency.
         var peerExchangeKey: ByteArray? = null
         val deadline = System.currentTimeMillis() + KEY_EXCHANGE_TIMEOUT_MS
         while (peerExchangeKey == null && System.currentTimeMillis() < deadline) {
@@ -190,7 +190,7 @@ class MeshInbox @Inject constructor(
         /** If a message arrives more than 30 seconds after it was sent, mark it as delayed. */
         private const val DELAYED_THRESHOLD_MS = 30_000L
         /** Max time to wait for peer's exchange key to arrive (matches outbox timeout). */
-        private const val KEY_EXCHANGE_TIMEOUT_MS = 5_000L
+        private const val KEY_EXCHANGE_TIMEOUT_MS = 10_000L
         private const val KEY_EXCHANGE_POLL_INTERVAL_MS = 250L
         /** Max time to wait for a group sender key to arrive via KEY_DISTRIBUTION. */
         private const val GROUP_KEY_WAIT_TIMEOUT_MS = 10_000L
@@ -241,7 +241,13 @@ class MeshInbox @Inject constructor(
         }
 
         val isDelayed = System.currentTimeMillis() - message.timestamp > DELAYED_THRESHOLD_MS
+        // Force the conversationId to the extracted groupId so the message is
+        // saved in the correct group conversation on this device. The sender's
+        // conversationId field in the decrypted envelope is not trusted here
+        // because encrypted payloads from older senders or crafted packets
+        // could carry an incorrect value.
         val localMessage = message.copy(
+            conversationId = groupId,
             deliveryStatus = DeliveryStatus.DELIVERED,
             isDelayed = isDelayed
         )

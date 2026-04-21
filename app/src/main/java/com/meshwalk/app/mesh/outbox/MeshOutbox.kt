@@ -6,6 +6,7 @@ import com.meshwalk.app.crypto.keys.KeyStorage
 import com.meshwalk.app.crypto.session.SessionManager
 import com.meshwalk.app.domain.model.DeliveryStatus
 import com.meshwalk.app.domain.model.MeshMessage
+import com.meshwalk.app.domain.model.MeshPacket
 import com.meshwalk.app.domain.repository.MessageRepository
 import com.meshwalk.app.domain.repository.PeerRepository
 import com.meshwalk.app.domain.usecase.MeshOutboxPort
@@ -14,6 +15,7 @@ import kotlinx.coroutines.*
 import timber.log.Timber
 import java.nio.ByteBuffer
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -43,6 +45,40 @@ class MeshOutbox @Inject constructor(
 
     private var retryScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
+    // Maps live packetIds to the messageId that produced them, so that when the
+    // routing engine abandons a queued packet we can mark the originating
+    // message as FAILED instead of leaving it stuck in PENDING. Entries are
+    // removed when the message reaches a terminal state (SENT or FAILED) or
+    // when the abandoned-packets collector processes them.
+    private val packetToMessage = ConcurrentHashMap<String, String>()
+
+    // Job collecting MeshRoutingEngine.abandonedPackets. Started by start() and
+    // cancelled by cancel() so that it doesn't outlive the mesh service.
+    private var abandonedCollectorJob: Job? = null
+
+    /**
+     * Begin collecting abandoned-packet events from the routing engine. When a
+     * queued packet is permanently given up on (QueuedMessageHandler retries
+     * exhausted), the corresponding message is marked FAILED so the UI can
+     * show an accurate status instead of a stuck PENDING watch icon.
+     */
+    fun start(scope: CoroutineScope) {
+        abandonedCollectorJob?.cancel()
+        abandonedCollectorJob = scope.launch {
+            routingEngine.abandonedPackets.collect { packetIds ->
+                for (packetId in packetIds) {
+                    val messageId = packetToMessage.remove(packetId) ?: continue
+                    try {
+                        messageRepo.updateDeliveryStatus(messageId, DeliveryStatus.FAILED)
+                        Timber.w("Packet ${packetId.take(8)} abandoned; marked message ${messageId.take(8)} FAILED")
+                    } catch (e: Exception) {
+                        Timber.e(e, "Failed to mark message ${messageId.take(8)} FAILED after abandonment")
+                    }
+                }
+            }
+        }
+    }
+
     /**
      * Cancel all in-flight retry jobs. Called when the mesh service stops so
      * that pending retry coroutines don't keep the scope alive across restarts.
@@ -50,8 +86,11 @@ class MeshOutbox @Inject constructor(
      * schedule retries (e.g. after a service restart within the same process).
      */
     fun cancel() {
+        abandonedCollectorJob?.cancel()
+        abandonedCollectorJob = null
         retryScope.cancel()
         retryScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        packetToMessage.clear()
     }
 
     override suspend fun enqueueMessage(message: MeshMessage, recipientNodeId: String) {
@@ -87,13 +126,19 @@ class MeshOutbox @Inject constructor(
                 recipientNodeId = recipientNodeId,
                 signingPrivateKey = signingKey
             )
+            // Record the packet→message mapping *before* routing so that if the
+            // routing engine immediately abandons it, the collector can still
+            // correlate back to the message.
+            packetToMessage[packet.packetId] = message.messageId
             val sent = routingEngine.sendPacket(packet)
             if (sent) {
+                packetToMessage.remove(packet.packetId)
                 messageRepo.updateDeliveryStatus(message.messageId, DeliveryStatus.SENT)
             } else {
                 // Packet was queued for store-and-forward delivery.
                 // Keep status as PENDING so the MessageResendManager can pick it up
                 // if the queue retry cycle exhausts all attempts without success.
+                // The mapping stays so a later abandonment can mark it FAILED.
                 Timber.w("Packet ${packet.packetId.take(8)} queued for later delivery (message stays PENDING)")
             }
         } catch (e: SessionNotReadyException) {
@@ -256,8 +301,28 @@ class MeshOutbox @Inject constructor(
                 .put(packet.encryptedPayload)
                 .array()
 
+            // Guard against payloads that exceed the wire-format limit. Without
+            // this check the packet is still sent but may be truncated or fail
+            // deserialization on the receiver side, silently dropping messages.
+            if (wrappedPayload.size > MeshPacket.MAX_PAYLOAD_SIZE) {
+                Timber.e(
+                    "Group payload ${wrappedPayload.size}B exceeds MAX_PAYLOAD_SIZE " +
+                        "${MeshPacket.MAX_PAYLOAD_SIZE}B for group ${groupId.take(8)}"
+                )
+                messageRepo.updateDeliveryStatus(message.messageId, DeliveryStatus.FAILED)
+                throw IllegalStateException(
+                    "Group message payload too large (${wrappedPayload.size} > ${MeshPacket.MAX_PAYLOAD_SIZE} bytes)"
+                )
+            }
+
             // Send to each member with a unique packetId (to avoid deduplication)
             // and the wrapped payload containing the groupId prefix.
+            // Note: we deliberately do NOT add group fan-out packets to
+            // packetToMessage. Group messages are marked SENT below as soon as
+            // fan-out completes (since other members get their own copies),
+            // so marking the message FAILED on later packet abandonment would
+            // incorrectly overwrite a successful delivery. The per-peer
+            // MessageResendManager handles redelivery to offline members.
             var anySent = false
             for (recipientNodeId in recipientNodeIds) {
                 val memberPacket = packet.copy(
