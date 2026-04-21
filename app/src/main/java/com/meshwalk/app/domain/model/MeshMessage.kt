@@ -33,6 +33,21 @@ sealed interface MessageContent {
     data class SystemEvent(val event: String) : MessageContent
 }
 
+/**
+ * Wire payload for a message reaction broadcast between peers.
+ *
+ * When a user toggles a reaction on a message, the app emits a REACTION packet
+ * addressed to the original message's sender so that sender can update their
+ * local reaction state and be notified.
+ */
+data class ReactionEnvelope(
+    val messageId: String,
+    val conversationId: String,
+    val emoji: String,
+    /** true = reactor removed their reaction; false = reactor set [emoji] as their reaction. */
+    val isRemoval: Boolean
+)
+
 enum class DeliveryStatus {
     PENDING,        // Created, not yet sent
     SENT,           // Handed to transport layer

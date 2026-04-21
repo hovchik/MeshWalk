@@ -6,6 +6,7 @@ import com.meshwalk.app.domain.model.MeshMessage
 import com.meshwalk.app.domain.model.MeshPacket
 import com.meshwalk.app.domain.model.MessageContent
 import com.meshwalk.app.domain.model.PacketType
+import com.meshwalk.app.domain.model.ReactionEnvelope
 import timber.log.Timber
 import java.nio.ByteBuffer
 import java.security.KeyFactory
@@ -122,6 +123,82 @@ class MessageEnvelopeManager @Inject constructor(
     }
 
     /**
+     * Encrypt a reaction event for a specific peer (the original message sender).
+     * Uses the same pairwise session/chain ratchet as regular messages, but
+     * tagged with PacketType.REACTION so the receiver routes it to the
+     * reaction handler instead of persisting it as a chat message.
+     */
+    suspend fun encryptReactionForPeer(
+        reaction: ReactionEnvelope,
+        senderNodeId: String,
+        recipientNodeId: String,
+        signingPrivateKey: ByteArray
+    ): MeshPacket {
+        val sessionId = buildSessionId(senderNodeId, recipientNodeId)
+        val (messageKey, counter) = sessionManager.advanceSendingChain(sessionId)
+
+        val plaintext = serializeReaction(reaction)
+        val nonce = ByteArray(GCM_NONCE_LENGTH).also { secureRandom.nextBytes(it) }
+
+        val ciphertext = encryptAesGcm(
+            plaintext,
+            messageKey,
+            nonce,
+            buildAad(senderNodeId, recipientNodeId, counter)
+        )
+
+        val counterPrefixedPayload = ByteBuffer.allocate(4 + ciphertext.size)
+            .putInt(counter)
+            .put(ciphertext)
+            .array()
+
+        val signingKey = KeyFactory.getInstance("EC")
+            .generatePrivate(PKCS8EncodedKeySpec(signingPrivateKey))
+        val dataToSign = buildSignatureInput(senderNodeId, recipientNodeId, counterPrefixedPayload, nonce)
+        val signature = keyManager.sign(dataToSign, signingKey)
+
+        return MeshPacket(
+            sourceNodeId = senderNodeId,
+            destinationNodeId = recipientNodeId,
+            packetType = PacketType.REACTION,
+            encryptedPayload = counterPrefixedPayload,
+            nonce = nonce,
+            senderSignature = signature,
+            flags = 0
+        )
+    }
+
+    /**
+     * Decrypt a received REACTION packet into a ReactionEnvelope.
+     */
+    suspend fun decryptReactionFromPeer(
+        packet: MeshPacket,
+        ourNodeId: String
+    ): ReactionEnvelope? {
+        return try {
+            val sessionId = buildSessionId(ourNodeId, packet.sourceNodeId)
+
+            val payloadBuffer = ByteBuffer.wrap(packet.encryptedPayload)
+            val counter = payloadBuffer.getInt()
+            val ciphertext = ByteArray(payloadBuffer.remaining()).also { payloadBuffer.get(it) }
+
+            val messageKey = sessionManager.deriveReceivingKey(sessionId, counter)
+
+            val plaintext = decryptAesGcm(
+                ciphertext,
+                messageKey,
+                packet.nonce,
+                buildAad(packet.sourceNodeId, ourNodeId, counter)
+            )
+
+            deserializeReaction(plaintext)
+        } catch (e: Exception) {
+            Timber.e(e, "Failed to decrypt reaction from ${packet.sourceNodeId}")
+            null
+        }
+    }
+
+    /**
      * Encrypt a message for a group using the sender's group chain key.
      * All group members with the sender's key can decrypt.
      */
@@ -210,6 +287,25 @@ class MessageEnvelopeManager @Inject constructor(
     }
 
     // -- Serialization --
+
+    private fun serializeReaction(reaction: ReactionEnvelope): ByteArray {
+        val action = if (reaction.isRemoval) "U" else "S"
+        // Emoji is placed last so the | separator is safe even if emoji contains |
+        val payload = "R|${reaction.messageId}|${reaction.conversationId}|$action|${reaction.emoji}"
+        return payload.toByteArray(Charsets.UTF_8)
+    }
+
+    private fun deserializeReaction(data: ByteArray): ReactionEnvelope? {
+        val payload = String(data, Charsets.UTF_8)
+        val parts = payload.split("|", limit = 5)
+        if (parts.size < 5 || parts[0] != "R") return null
+        return ReactionEnvelope(
+            messageId = parts[1],
+            conversationId = parts[2],
+            isRemoval = parts[3] == "U",
+            emoji = parts[4]
+        )
+    }
 
     private fun serializeMessage(message: MeshMessage): ByteArray {
         val content = when (message.content) {

@@ -173,6 +173,63 @@ class MessageNotificationManager @Inject constructor(
     }
 
     /**
+     * Show a notification when a peer reacts to one of our messages.
+     */
+    fun showReactionNotification(
+        conversationId: String,
+        senderName: String,
+        emoji: String,
+        messagePreview: String,
+        isRemoval: Boolean
+    ) {
+        if (!hasNotificationPermission()) {
+            Timber.d("Notification permission not granted, skipping reaction notification")
+            return
+        }
+
+        // Offset by 40000 so reaction notifications don't collide with per-conversation message notifications.
+        val notificationId = BASE_NOTIFICATION_ID + 40000 + conversationId.hashCode().and(0x7FFF)
+
+        val intent = Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            putExtra("conversationId", conversationId)
+        }
+        val pendingIntent = PendingIntent.getActivity(
+            context,
+            notificationId,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val title = if (isRemoval) {
+            "$senderName removed $emoji"
+        } else {
+            "$senderName reacted $emoji"
+        }
+        val body = if (messagePreview.isNotBlank()) "to: $messagePreview" else "to your message"
+
+        val builder = NotificationCompat.Builder(context, MESSAGE_CHANNEL_ID)
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setContentTitle(title)
+            .setContentText(body)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(body))
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setCategory(NotificationCompat.CATEGORY_SOCIAL)
+            .setContentIntent(pendingIntent)
+            .setAutoCancel(true)
+            .setGroup(GROUP_KEY)
+
+        try {
+            NotificationManagerCompat.from(context).notify(notificationId, builder.build())
+            Timber.d("Posted reaction notification for conversation ${conversationId.take(8)}")
+        } catch (e: SecurityException) {
+            Timber.w(e, "SecurityException posting reaction notification")
+        }
+
+        postSummaryNotification()
+    }
+
+    /**
      * Cancel notification for a conversation (e.g. when user opens the chat).
      */
     fun cancelNotification(conversationId: String) {
