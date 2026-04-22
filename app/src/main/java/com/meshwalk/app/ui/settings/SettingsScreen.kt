@@ -137,6 +137,7 @@ class SettingsViewModel @Inject constructor(
 fun SettingsScreen(
     onDiagnostics: () -> Unit,
     onSubscription: () -> Unit = {},
+    onExperimental: () -> Unit = {},
     viewModel: SettingsViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsState()
@@ -554,6 +555,14 @@ fun SettingsScreen(
                     null
                 )
             }
+        )
+
+        ListItem(
+            modifier = Modifier.clickable(onClick = onExperimental),
+            headlineContent = { Text("Experimental Features") },
+            supportingContent = { Text("Drop zones, SOS, bulletin board, and more") },
+            leadingContent = { Icon(Icons.Filled.Science, null) },
+            trailingContent = { Icon(Icons.Filled.ChevronRight, null) }
         )
 
         Spacer(modifier = Modifier.height(32.dp))

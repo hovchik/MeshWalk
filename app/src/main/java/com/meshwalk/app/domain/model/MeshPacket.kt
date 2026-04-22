@@ -37,6 +37,10 @@ data class MeshPacket(
         const val FLAG_GROUP_MESSAGE = 0x10
         const val FLAG_KEY_EXCHANGE = 0x20
         const val FLAG_READ_RECEIPT = 0x40
+        /** Experimental: emergency SOS broadcast — bypass normal TTL limits. */
+        const val FLAG_SOS = 0x80
+        /** Experimental: anonymous bulletin post (no verified sender identity). */
+        const val FLAG_ANONYMOUS = 0x100
     }
 
     val isAckRequested: Boolean get() = flags and FLAG_ACK_REQUESTED != 0
@@ -46,6 +50,8 @@ data class MeshPacket(
     val isGroupMessage: Boolean get() = flags and FLAG_GROUP_MESSAGE != 0
     val isKeyExchange: Boolean get() = flags and FLAG_KEY_EXCHANGE != 0
     val isReadReceipt: Boolean get() = flags and FLAG_READ_RECEIPT != 0
+    val isSos: Boolean get() = flags and FLAG_SOS != 0
+    val isAnonymous: Boolean get() = flags and FLAG_ANONYMOUS != 0
     val isExpired: Boolean get() = ttl <= 0
 
     /**
@@ -76,5 +82,11 @@ enum class PacketType {
     PING,             // Keepalive / reachability probe
     STORE_FORWARD,    // Store-and-forward delivery
     READ_RECEIPT,     // Read receipt notification
-    REACTION          // Message reaction
+    REACTION,         // Message reaction
+    // Experimental packet types:
+    SOS,              // Emergency SOS broadcast (flag-bypassed TTL)
+    BULLETIN,         // Anonymous bulletin-board post (broadcast)
+    GOSSIP_DIGEST,    // Bloom-filter digest for opportunistic sync
+    REPUTATION_TOKEN, // Signed "I saw this peer relay my packet" attestation
+    DROP_ZONE         // Geofenced drop-zone announcement
 }

@@ -11,23 +11,48 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
+import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import com.meshwalk.app.experimental.DuressManager
+import com.meshwalk.app.experimental.DuressUnlockResult
+import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.launch
+import javax.inject.Inject
+
+@HiltViewModel
+class BiometricLockViewModel @Inject constructor(
+    private val duressManager: DuressManager
+) : ViewModel() {
+    fun checkDuress(pin: String, onResult: (DuressUnlockResult) -> Unit) {
+        viewModelScope.launch {
+            onResult(duressManager.checkAndTrigger(pin))
+        }
+    }
+}
 
 /**
  * Full-screen lock gate displayed when fingerprint lock is enabled.
  * Automatically prompts for biometric authentication on first display
  * and provides a manual retry button.
+ *
+ * Also exposes a "Use PIN" path that, if a duress PIN has been configured,
+ * silently wipes local data when entered and then proceeds with unlock.
  */
 @Composable
 fun BiometricLockScreen(
-    onAuthenticated: () -> Unit
+    onAuthenticated: () -> Unit,
+    viewModel: BiometricLockViewModel = hiltViewModel()
 ) {
     val context = LocalContext.current
     val activity = context as? FragmentActivity
     var errorMessage by remember { mutableStateOf<String?>(null) }
+    var showPinDialog by remember { mutableStateOf(false) }
 
     val promptBiometric = remember(activity) {
         {
@@ -65,10 +90,7 @@ fun BiometricLockScreen(
         }
     }
 
-    // Prompt automatically on first composition
-    LaunchedEffect(Unit) {
-        promptBiometric()
-    }
+    LaunchedEffect(Unit) { promptBiometric() }
 
     Surface(
         modifier = Modifier.fillMaxSize(),
@@ -117,9 +139,7 @@ fun BiometricLockScreen(
 
             Spacer(modifier = Modifier.height(32.dp))
 
-            FilledTonalButton(
-                onClick = { promptBiometric() }
-            ) {
+            FilledTonalButton(onClick = { promptBiometric() }) {
                 Icon(
                     Icons.Filled.Fingerprint,
                     contentDescription = null,
@@ -128,6 +148,55 @@ fun BiometricLockScreen(
                 Spacer(modifier = Modifier.width(8.dp))
                 Text("Unlock")
             }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            TextButton(onClick = { showPinDialog = true }) {
+                Text("Use PIN")
+            }
         }
     }
+
+    if (showPinDialog) {
+        DuressPinPrompt(
+            onDismiss = { showPinDialog = false },
+            onSubmit = { pin ->
+                viewModel.checkDuress(pin) { result ->
+                    showPinDialog = false
+                    when (result) {
+                        DuressUnlockResult.TRIGGERED -> onAuthenticated()
+                        DuressUnlockResult.NOT_APPLICABLE -> errorMessage = "PIN unlock not configured"
+                        DuressUnlockResult.NOT_A_DURESS_PIN -> errorMessage = "Incorrect PIN"
+                    }
+                }
+            }
+        )
+    }
+}
+
+@Composable
+private fun DuressPinPrompt(
+    onDismiss: () -> Unit,
+    onSubmit: (String) -> Unit
+) {
+    var pin by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Enter PIN") },
+        text = {
+            OutlinedTextField(
+                value = pin,
+                onValueChange = { pin = it.filter(Char::isDigit) },
+                label = { Text("PIN") },
+                visualTransformation = PasswordVisualTransformation(),
+                singleLine = true
+            )
+        },
+        confirmButton = {
+            TextButton(enabled = pin.length >= 4, onClick = { onSubmit(pin) }) { Text("Unlock") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        }
+    )
 }

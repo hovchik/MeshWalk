@@ -24,7 +24,9 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
@@ -376,6 +378,8 @@ fun ChatScreen(
     val listState = rememberLazyListState()
     val snackbarHostState = remember { SnackbarHostState() }
     val keyboardController = LocalSoftwareKeyboardController.current
+    val clipboardManager = LocalClipboardManager.current
+    val scope = rememberCoroutineScope()
 
     // Auto-scroll to bottom on new messages
     LaunchedEffect(state.messages.size) {
@@ -771,6 +775,30 @@ fun ChatScreen(
                         }
                     }
                     HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                    // Copy
+                    val copyableText = when (val c = msg.content) {
+                        is MessageContent.Text -> c.text
+                        is MessageContent.SystemEvent -> c.event
+                    }
+                    TextButton(
+                        onClick = {
+                            clipboardManager.setText(AnnotatedString(copyableText))
+                            contextMenuMessage = null
+                            scope.launch {
+                                snackbarHostState.showSnackbar(
+                                    message = "Message copied",
+                                    duration = SnackbarDuration.Short
+                                )
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = copyableText.isNotEmpty()
+                    ) {
+                        Icon(Icons.Filled.ContentCopy, null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Copy")
+                        Spacer(modifier = Modifier.weight(1f))
+                    }
                     // Reply
                     TextButton(
                         onClick = {

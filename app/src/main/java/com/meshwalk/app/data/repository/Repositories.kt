@@ -504,6 +504,21 @@ class SettingsRepositoryImpl @Inject constructor(
         private val HAPTIC_FEEDBACK = booleanPreferencesKey("haptic_feedback")
         private val AUTO_RETRY_FAILED = booleanPreferencesKey("auto_retry_failed")
         private val READ_RECEIPTS = booleanPreferencesKey("read_receipts")
+        // Experimental feature toggles
+        private val EXP_DROP_ZONES = booleanPreferencesKey("exp_drop_zones")
+        private val EXP_RELAY_INCENTIVES = booleanPreferencesKey("exp_relay_incentives")
+        private val EXP_SOS_BROADCAST = booleanPreferencesKey("exp_sos_broadcast")
+        private val EXP_BULLETIN = booleanPreferencesKey("exp_bulletin")
+        private val EXP_TRUST_GRAPH = booleanPreferencesKey("exp_trust_graph")
+        private val EXP_DOUBLE_RATCHET = booleanPreferencesKey("exp_double_ratchet")
+        private val EXP_PHRASEBOOK = booleanPreferencesKey("exp_phrasebook")
+        private val EXP_GOSSIP = booleanPreferencesKey("exp_gossip")
+        private val EXP_REPUTATION = booleanPreferencesKey("exp_reputation")
+        private val EXP_SIGNAL_HEATMAP = booleanPreferencesKey("exp_signal_heatmap")
+        private val EXP_TIME_TO_REACH = booleanPreferencesKey("exp_time_to_reach")
+        private val EXP_VOICE_TRANSCRIPTS = booleanPreferencesKey("exp_voice_transcripts")
+        private val EXP_DURESS_PIN = booleanPreferencesKey("exp_duress_pin")
+        private val EXP_DURESS_PIN_HASH = stringPreferencesKey("exp_duress_pin_hash")
     }
 
     override fun observeSettings(): Flow<AppSettings> {
@@ -534,6 +549,25 @@ class SettingsRepositoryImpl @Inject constructor(
             prefs[HAPTIC_FEEDBACK] = settings.hapticFeedbackEnabled
             prefs[AUTO_RETRY_FAILED] = settings.autoRetryFailedMessages
             prefs[READ_RECEIPTS] = settings.readReceiptsEnabled
+            val exp = settings.experimental
+            prefs[EXP_DROP_ZONES] = exp.dropZonesEnabled
+            prefs[EXP_RELAY_INCENTIVES] = exp.relayIncentivesEnabled
+            prefs[EXP_SOS_BROADCAST] = exp.sosBroadcastEnabled
+            prefs[EXP_BULLETIN] = exp.bulletinBoardEnabled
+            prefs[EXP_TRUST_GRAPH] = exp.trustGraphEnabled
+            prefs[EXP_DOUBLE_RATCHET] = exp.partialDoubleRatchetEnabled
+            prefs[EXP_PHRASEBOOK] = exp.phrasebookEnabled
+            prefs[EXP_GOSSIP] = exp.gossipSyncEnabled
+            prefs[EXP_REPUTATION] = exp.reputationTokensEnabled
+            prefs[EXP_SIGNAL_HEATMAP] = exp.signalHeatmapEnabled
+            prefs[EXP_TIME_TO_REACH] = exp.timeToReachEnabled
+            prefs[EXP_VOICE_TRANSCRIPTS] = exp.voiceTranscriptsEnabled
+            prefs[EXP_DURESS_PIN] = exp.duressPinEnabled
+            if (exp.duressPinHash != null) {
+                prefs[EXP_DURESS_PIN_HASH] = exp.duressPinHash
+            } else {
+                prefs.remove(EXP_DURESS_PIN_HASH)
+            }
         }
     }
 
@@ -567,6 +601,22 @@ class SettingsRepositoryImpl @Inject constructor(
         showSignalStrength = this[SHOW_SIGNAL_STRENGTH] ?: true,
         hapticFeedbackEnabled = this[HAPTIC_FEEDBACK] ?: true,
         autoRetryFailedMessages = this[AUTO_RETRY_FAILED] ?: true,
-        readReceiptsEnabled = this[READ_RECEIPTS] ?: true
+        readReceiptsEnabled = this[READ_RECEIPTS] ?: true,
+        experimental = ExperimentalFeatures(
+            dropZonesEnabled = this[EXP_DROP_ZONES] ?: false,
+            relayIncentivesEnabled = this[EXP_RELAY_INCENTIVES] ?: false,
+            sosBroadcastEnabled = this[EXP_SOS_BROADCAST] ?: false,
+            bulletinBoardEnabled = this[EXP_BULLETIN] ?: false,
+            trustGraphEnabled = this[EXP_TRUST_GRAPH] ?: false,
+            partialDoubleRatchetEnabled = this[EXP_DOUBLE_RATCHET] ?: false,
+            phrasebookEnabled = this[EXP_PHRASEBOOK] ?: false,
+            gossipSyncEnabled = this[EXP_GOSSIP] ?: false,
+            reputationTokensEnabled = this[EXP_REPUTATION] ?: false,
+            signalHeatmapEnabled = this[EXP_SIGNAL_HEATMAP] ?: false,
+            timeToReachEnabled = this[EXP_TIME_TO_REACH] ?: false,
+            voiceTranscriptsEnabled = this[EXP_VOICE_TRANSCRIPTS] ?: false,
+            duressPinEnabled = this[EXP_DURESS_PIN] ?: false,
+            duressPinHash = this[EXP_DURESS_PIN_HASH]
+        )
     )
 }

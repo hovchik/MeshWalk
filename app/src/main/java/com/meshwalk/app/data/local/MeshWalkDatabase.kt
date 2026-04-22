@@ -19,9 +19,15 @@ import com.meshwalk.app.data.local.entity.*
         GroupEntity::class,
         SenderKeyEntity::class,
         BlockedPeerEntity::class,
-        GroupArchiveEntity::class
+        GroupArchiveEntity::class,
+        DropZoneEntity::class,
+        BulletinPostEntity::class,
+        ReputationTokenEntity::class,
+        SignalSampleEntity::class,
+        PeerStatsEntity::class,
+        RelayCounterEntity::class
     ],
-    version = 8,
+    version = 9,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -35,6 +41,12 @@ abstract class MeshWalkDatabase : RoomDatabase() {
     abstract fun senderKeyDao(): SenderKeyDao
     abstract fun blockedPeerDao(): BlockedPeerDao
     abstract fun groupArchiveDao(): GroupArchiveDao
+    abstract fun dropZoneDao(): DropZoneDao
+    abstract fun bulletinPostDao(): BulletinPostDao
+    abstract fun reputationTokenDao(): ReputationTokenDao
+    abstract fun signalSampleDao(): SignalSampleDao
+    abstract fun peerStatsDao(): PeerStatsDao
+    abstract fun relayCounterDao(): RelayCounterDao
 
     companion object {
         const val DATABASE_NAME = "meshwalk_db"
@@ -147,6 +159,83 @@ abstract class MeshWalkDatabase : RoomDatabase() {
                 db.execSQL("ALTER TABLE messages ADD COLUMN isPinned INTEGER NOT NULL DEFAULT 0")
                 db.execSQL("ALTER TABLE conversations ADD COLUMN nickname TEXT DEFAULT ''")
                 db.execSQL("ALTER TABLE conversations ADD COLUMN isFavorite INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
+        /**
+         * v8->v9: Experimental feature tables (drop zones, bulletin posts,
+         * reputation tokens, signal samples, peer stats, relay counters).
+         */
+        val MIGRATION_8_9 = object : Migration(8, 9) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS drop_zones (
+                        zoneId TEXT NOT NULL PRIMARY KEY,
+                        creatorNodeId TEXT NOT NULL,
+                        recipientNodeId TEXT,
+                        encryptedContent BLOB NOT NULL,
+                        nonce BLOB NOT NULL,
+                        latitude REAL,
+                        longitude REAL,
+                        radiusMeters REAL,
+                        beaconNodeId TEXT,
+                        createdAt INTEGER NOT NULL,
+                        expiresAt INTEGER NOT NULL,
+                        isUnlocked INTEGER NOT NULL,
+                        unlockedAt INTEGER
+                    )
+                """.trimIndent())
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS bulletin_posts (
+                        postId TEXT NOT NULL PRIMARY KEY,
+                        body TEXT NOT NULL,
+                        category TEXT NOT NULL,
+                        createdAt INTEGER NOT NULL,
+                        expiresAt INTEGER NOT NULL,
+                        proofOfWork INTEGER NOT NULL,
+                        difficultyBits INTEGER NOT NULL,
+                        hopCount INTEGER NOT NULL,
+                        isOwn INTEGER NOT NULL
+                    )
+                """.trimIndent())
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS reputation_tokens (
+                        subjectNodeId TEXT NOT NULL,
+                        attesterNodeId TEXT NOT NULL,
+                        relayCount INTEGER NOT NULL,
+                        issuedAt INTEGER NOT NULL,
+                        signature BLOB NOT NULL,
+                        PRIMARY KEY(subjectNodeId, attesterNodeId, issuedAt)
+                    )
+                """.trimIndent())
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS signal_samples (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        peerNodeId TEXT NOT NULL,
+                        rssi INTEGER NOT NULL,
+                        latitude REAL,
+                        longitude REAL,
+                        recordedAt INTEGER NOT NULL
+                    )
+                """.trimIndent())
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS peer_stats (
+                        nodeId TEXT NOT NULL PRIMARY KEY,
+                        encounterCount INTEGER NOT NULL,
+                        lastEncounterAt INTEGER NOT NULL,
+                        deliveryLatencyEwmaMs INTEGER NOT NULL,
+                        deliverySampleCount INTEGER NOT NULL
+                    )
+                """.trimIndent())
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS relay_counters (
+                        id TEXT NOT NULL PRIMARY KEY,
+                        packetsRelayed INTEGER NOT NULL,
+                        bytesRelayed INTEGER NOT NULL,
+                        sosRelayed INTEGER NOT NULL,
+                        lastUpdated INTEGER NOT NULL
+                    )
+                """.trimIndent())
             }
         }
     }

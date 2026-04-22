@@ -25,6 +25,11 @@ import com.meshwalk.app.ui.peers.PeersScreen
 import com.meshwalk.app.ui.settings.SettingsScreen
 import com.meshwalk.app.ui.subscription.SubscriptionScreen
 import com.meshwalk.app.ui.components.TopMenuBar
+import com.meshwalk.app.ui.experimental.BulletinBoardScreen
+import com.meshwalk.app.ui.experimental.DropZonesScreen
+import com.meshwalk.app.ui.experimental.ExperimentalSettingsScreen
+import com.meshwalk.app.ui.experimental.RelayStatsScreen
+import com.meshwalk.app.ui.experimental.SosScreen
 
 // -- Navigation Routes --
 object Routes {
@@ -38,6 +43,11 @@ object Routes {
     const val SETTINGS = "settings"
     const val DIAGNOSTICS = "diagnostics"
     const val SUBSCRIPTION = "subscription"
+    const val EXPERIMENTAL = "experimental"
+    const val EXP_BULLETIN = "experimental/bulletin"
+    const val EXP_DROP_ZONES = "experimental/drop_zones"
+    const val EXP_RELAY_STATS = "experimental/relay_stats"
+    const val EXP_SOS = "experimental/sos"
 
     fun chatDetail(conversationId: String, peerNodeId: String) =
         "chat/$conversationId/$peerNodeId"
@@ -209,6 +219,9 @@ fun MeshWalkApp(mainViewModel: MainViewModel = hiltViewModel()) {
                     },
                     onSubscription = {
                         navController.navigate(Routes.SUBSCRIPTION)
+                    },
+                    onExperimental = {
+                        navController.navigate(Routes.EXPERIMENTAL)
                     }
                 )
             }
@@ -219,6 +232,32 @@ fun MeshWalkApp(mainViewModel: MainViewModel = hiltViewModel()) {
 
             composable(Routes.SUBSCRIPTION) {
                 SubscriptionScreen(onBack = { navController.popBackStack() })
+            }
+
+            composable(Routes.EXPERIMENTAL) {
+                ExperimentalSettingsScreen(
+                    onBack = { navController.popBackStack() },
+                    onBulletin = { navController.navigate(Routes.EXP_BULLETIN) },
+                    onDropZones = { navController.navigate(Routes.EXP_DROP_ZONES) },
+                    onRelayStats = { navController.navigate(Routes.EXP_RELAY_STATS) },
+                    onSos = { navController.navigate(Routes.EXP_SOS) }
+                )
+            }
+
+            composable(Routes.EXP_BULLETIN) {
+                BulletinBoardScreen(onBack = { navController.popBackStack() })
+            }
+
+            composable(Routes.EXP_DROP_ZONES) {
+                DropZonesScreen(onBack = { navController.popBackStack() })
+            }
+
+            composable(Routes.EXP_RELAY_STATS) {
+                RelayStatsScreen(onBack = { navController.popBackStack() })
+            }
+
+            composable(Routes.EXP_SOS) {
+                SosScreen(onBack = { navController.popBackStack() })
             }
         }
     }
