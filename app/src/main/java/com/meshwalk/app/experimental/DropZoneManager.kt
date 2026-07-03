@@ -48,6 +48,8 @@ class DropZoneManager @Inject constructor(
     private val dao: DropZoneDao,
     private val envelope: MessageEnvelopeManager
 ) {
+    private val secureRandom = SecureRandom()
+
     fun observeZones(): Flow<List<DropZone>> = dao.observeAll().map { list ->
         list.map { it.toDomain(unlockedContent = null) }
     }
@@ -189,7 +191,7 @@ class DropZoneManager @Inject constructor(
         return r * 2 * atan2(sqrt(a), sqrt(1 - a))
     }
 
-    private fun randomNonce(): ByteArray = ByteArray(12).also { SecureRandom().nextBytes(it) }
+    private fun randomNonce(): ByteArray = ByteArray(12).also { secureRandom.nextBytes(it) }
 
     private fun DropZoneEntity.toDomain(unlockedContent: String?) = DropZone(
         zoneId = zoneId,

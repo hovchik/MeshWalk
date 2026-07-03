@@ -56,11 +56,18 @@ class BulletinBoardManager @Inject constructor(
         ttlMs: Long = DEFAULT_TTL_MS
     ): BulletinPost = withContext(Dispatchers.Default) {
         val postId = UUID.randomUUID().toString()
-        val nonce = mine(postId, body, difficultyBits)
+        // Newlines must be stripped BEFORE mining: serialize() flattens them for
+        // the wire format, so receivers verify the proof against the flattened
+        // body. Mining over the raw body would make every receiver reject the post.
+        val wireBody = body.replace("\n", " ")
+        val nonce = mine(postId, wireBody, difficultyBits)
+            ?: throw IllegalArgumentException(
+                "Proof-of-work not found within the safety cap for difficulty $difficultyBits bits"
+            )
         val now = System.currentTimeMillis()
         val post = BulletinPost(
             postId = postId,
-            body = body,
+            body = wireBody,
             category = category,
             createdAt = now,
             expiresAt = now + ttlMs,
@@ -116,7 +123,8 @@ class BulletinBoardManager @Inject constructor(
 
     // -- Proof-of-work --
 
-    private fun mine(postId: String, body: String, difficultyBits: Int): Long {
+    /** Returns the nonce satisfying the proof, or null if the safety cap is hit. */
+    private fun mine(postId: String, body: String, difficultyBits: Int): Long? {
         val md = MessageDigest.getInstance("SHA-256")
         val prefix = (postId + "" + body + "").toByteArray(Charsets.UTF_8)
         var nonce = 0L
@@ -128,7 +136,7 @@ class BulletinBoardManager @Inject constructor(
             if (leadingZeroBits(hash) >= difficultyBits) return nonce
             nonce++
             // Safety cap so we don't spin forever if caller asks for absurd difficulty.
-            if (nonce > 10_000_000L) return nonce
+            if (nonce > 10_000_000L) return null
         }
     }
 

@@ -35,52 +35,6 @@ class SessionManager @Inject constructor(
     private val activeSessions = ConcurrentHashMap<String, MeshSession>()
 
     /**
-     * Get or establish a session with a peer.
-     */
-    suspend fun getOrCreateSession(
-        ourNodeId: String,
-        peerNodeId: String,
-        peerPublicExchangeKey: ByteArray
-    ): MeshSession {
-        val sessionId = createSessionId(ourNodeId, peerNodeId)
-
-        // Check memory cache
-        activeSessions[sessionId]?.let { return it }
-
-        // Check persistent store
-        sessionStore.getSession(sessionId)?.let { stored ->
-            activeSessions[sessionId] = stored
-            return stored
-        }
-
-        // Create new session via ECDH
-        return establishSession(ourNodeId, peerNodeId, peerPublicExchangeKey)
-    }
-
-    /**
-     * Establish a new session with ECDH key agreement.
-     */
-    private suspend fun establishSession(
-        ourNodeId: String,
-        peerNodeId: String,
-        peerPublicExchangeKey: ByteArray
-    ): MeshSession {
-        val sessionId = createSessionId(ourNodeId, peerNodeId)
-        val keyFactory = KeyFactory.getInstance("EC")
-
-        val ourPrivateKey = com.meshwalk.app.crypto.keys.KeyStorage::class.java
-            .let {
-                // In production, retrieve from KeyStorage. Here we use the key manager's approach.
-                // This will be wired through DI properly.
-                throw SessionEstablishmentException("Exchange key not found for $ourNodeId")
-            }
-
-        // This method will be called via the properly injected dependency chain
-        // The actual implementation is below in establishSessionWithKeys
-        throw SessionEstablishmentException("Use establishSessionWithKeys instead")
-    }
-
-    /**
      * Establish session with actual key material.
      */
     suspend fun establishSessionWithKeys(
@@ -192,6 +146,15 @@ class SessionManager @Inject constructor(
         val session = activeSessions[sessionId]
             ?: throw SessionNotFoundException(sessionId)
 
+        // Out-of-order or replayed message: the chain has already been ratcheted
+        // past this counter and the old chain key is gone (that's the point of
+        // forward secrecy). Fail WITHOUT touching session state — the previous
+        // implementation would derive a wrong key from the current chain and
+        // regress receiveCounter, permanently desyncing the session.
+        if (counter < session.receiveCounter) {
+            throw StaleMessageCounterException(sessionId, counter, session.receiveCounter)
+        }
+
         // Ratchet the receiving chain from our current counter to the target counter.
         // Each step: derive message key, then advance chain key.
         var chainKey = session.receivingChainKey
@@ -232,7 +195,7 @@ class SessionManager @Inject constructor(
     /**
      * Evict in-memory session objects that have not been used for more than 24 hours.
      * Sessions remain persisted to disk via [SessionStore] and are restored transparently
-     * on the next [getOrCreateSession] / [hasSession] call, so evicting them here
+     * on the next [establishSessionWithKeys] / [hasSession] call, so evicting them here
      * only frees memory without affecting correctness.
      *
      * Called from the routing engine's periodic maintenance loop.
@@ -292,5 +255,6 @@ data class MeshSession(
 class SessionNotFoundException(sessionId: String) :
     Exception("Session not found: $sessionId")
 
-class SessionEstablishmentException(message: String) :
-    Exception(message)
+/** Thrown when a message arrives with a counter the receiving chain has already ratcheted past. */
+class StaleMessageCounterException(sessionId: String, counter: Int, expected: Int) :
+    Exception("Stale message counter $counter for session $sessionId (chain already at $expected)")

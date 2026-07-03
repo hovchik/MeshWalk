@@ -568,6 +568,10 @@ class TransportManager @Inject constructor(
 
             fun readBytes(): ByteArray {
                 val len = buffer.getInt()
+                // Validate before allocating: a corrupt/malicious length prefix
+                // could otherwise request a multi-GB array and OOM the process
+                // (OutOfMemoryError is not caught by the Exception handler below).
+                require(len in 0..buffer.remaining()) { "Invalid field length: $len" }
                 return ByteArray(len).also { buffer.get(it) }
             }
 

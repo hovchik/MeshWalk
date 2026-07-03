@@ -92,11 +92,14 @@ class ReputationTokenManager @Inject constructor(
     private fun signToken(
         subject: String, attester: String, relayCount: Int, issuedAt: Long, privKey: ByteArray
     ): ByteArray {
-        val buf = ByteBuffer.allocate(4 + 8 + subject.length + attester.length)
+        val subjectBytes = subject.toByteArray(Charsets.UTF_8)
+        val attesterBytes = attester.toByteArray(Charsets.UTF_8)
+        // Size by encoded byte length, not char count — they differ for non-ASCII IDs.
+        val buf = ByteBuffer.allocate(4 + 8 + subjectBytes.size + attesterBytes.size)
         buf.putInt(relayCount)
         buf.putLong(issuedAt)
-        buf.put(subject.toByteArray(Charsets.UTF_8))
-        buf.put(attester.toByteArray(Charsets.UTF_8))
+        buf.put(subjectBytes)
+        buf.put(attesterBytes)
         val md = MessageDigest.getInstance("SHA-256")
         md.update(privKey)
         md.update(buf.array())

@@ -79,7 +79,8 @@ class GossipSyncManager @Inject constructor(
     /** Build a Bloom digest of our known message IDs. */
     suspend fun buildLocalDigest(capacity: Int = 2048): BloomFilter {
         val filter = BloomFilter.sized(capacity)
-        // Use undelivered + recent messages as the advertised set.
+        // Advertise the undelivered set — these are the messages a passing
+        // carrier could still usefully relay for us.
         val known = messageRepo.getUndeliveredMessages().map { it.messageId }
         known.forEach { filter.add(it) }
         return filter

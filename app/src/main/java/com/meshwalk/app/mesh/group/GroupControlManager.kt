@@ -498,6 +498,9 @@ class GroupControlManager @Inject constructor(
 
             fun readString(): String {
                 val len = buffer.getInt()
+                // Validate before allocating so a corrupt/malicious length prefix
+                // can't request a huge array and OOM the process.
+                require(len in 0..buffer.remaining()) { "Invalid string length: $len" }
                 val bytes = ByteArray(len).also { buffer.get(it) }
                 return String(bytes, StandardCharsets.UTF_8)
             }
@@ -508,9 +511,12 @@ class GroupControlManager @Inject constructor(
             val groupType = ConversationType.entries[buffer.get().toInt()]
 
             val memberCount = buffer.getInt()
+            // Each member entry needs at least a 4-byte length prefix.
+            require(memberCount in 0..buffer.remaining() / 4) { "Invalid member count: $memberCount" }
             val memberNodeIds = (0 until memberCount).map { readString() }
 
             val keyLen = if (buffer.remaining() >= 4) buffer.getInt() else 0
+            require(keyLen <= buffer.remaining()) { "Invalid sender key length: $keyLen" }
             val senderKey = if (keyLen > 0) ByteArray(keyLen).also { buffer.get(it) } else null
 
             // Read expiresAt if present (backwards-compatible with older payloads)

@@ -29,7 +29,8 @@ class BulletinBoardViewModel @Inject constructor(
 ) : ViewModel() {
     data class UiState(
         val posts: List<BulletinPost> = emptyList(),
-        val mining: Boolean = false
+        val mining: Boolean = false,
+        val error: String? = null
     )
     private val _state = MutableStateFlow(UiState())
     val state = _state.asStateFlow()
@@ -44,10 +45,19 @@ class BulletinBoardViewModel @Inject constructor(
 
     fun post(body: String, category: String) {
         viewModelScope.launch {
-            _state.value = _state.value.copy(mining = true)
-            manager.createLocal(body, category)
-            _state.value = _state.value.copy(mining = false)
+            _state.value = _state.value.copy(mining = true, error = null)
+            try {
+                manager.createLocal(body, category)
+            } catch (e: Exception) {
+                _state.value = _state.value.copy(error = "Couldn't create post: ${e.message}")
+            } finally {
+                _state.value = _state.value.copy(mining = false)
+            }
         }
+    }
+
+    fun clearError() {
+        _state.value = _state.value.copy(error = null)
     }
 }
 
@@ -59,8 +69,17 @@ fun BulletinBoardScreen(
 ) {
     val state by viewModel.state.collectAsState()
     var showComposer by remember { mutableStateOf(false) }
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    LaunchedEffect(state.error) {
+        state.error?.let { message ->
+            snackbarHostState.showSnackbar(message)
+            viewModel.clearError()
+        }
+    }
 
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = { Text("Bulletin Board") },

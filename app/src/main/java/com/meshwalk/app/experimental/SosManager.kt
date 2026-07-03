@@ -36,7 +36,8 @@ data class SosBroadcast(
     fun toPayloadString(): String = buildString {
         append("SOS|")
         append(broadcastId).append('|')
-        append(senderName ?: "").append('|')
+        // Field separator must be escaped in user-controlled values or parsing breaks.
+        append(senderName?.replace('|', '/') ?: "").append('|')
         append(latitude ?: "").append('|')
         append(longitude ?: "").append('|')
         append(batteryPercent ?: "").append('|')
