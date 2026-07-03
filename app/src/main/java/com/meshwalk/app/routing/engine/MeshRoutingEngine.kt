@@ -69,6 +69,11 @@ class MeshRoutingEngine @Inject constructor(
     private val _abandonedPackets = MutableSharedFlow<List<String>>(extraBufferCapacity = 8)
     val abandonedPackets: SharedFlow<List<String>> = _abandonedPackets
 
+    // Delivery acknowledgements addressed to this node. The outbox correlates
+    // these back to messages to mark them DELIVERED.
+    private val _acksReceived = MutableSharedFlow<AckEvent>(extraBufferCapacity = 32)
+    val acksReceived: SharedFlow<AckEvent> = _acksReceived
+
     private var selfNodeId: String? = null
     private var isRunning = false
 
@@ -222,6 +227,21 @@ class MeshRoutingEngine @Inject constructor(
         // 4. Is this packet for us?
         val myNodeId = selfNodeId ?: return
         if (packet.destinationNodeId == myNodeId) {
+            // Delivery acknowledgement: correlate back to the original packet
+            // instead of surfacing it as an application message.
+            if (packet.packetType == PacketType.ACK) {
+                val originalPacketId = String(packet.encryptedPayload, Charsets.UTF_8)
+                _acksReceived.emit(
+                    AckEvent(
+                        originalPacketId = originalPacketId,
+                        fromNodeId = packet.sourceNodeId,
+                        receivedAt = System.currentTimeMillis()
+                    )
+                )
+                Timber.d("ACK for ${originalPacketId.take(8)} from ${packet.sourceNodeId.take(8)}")
+                return
+            }
+
             Timber.d("Packet ${packet.packetId} delivered to us from ${packet.sourceNodeId}")
             _incomingPackets.emit(packet)
             emitDiagnostic(RoutingDiagnosticEvent.PacketDelivered(
@@ -437,6 +457,15 @@ class MeshRoutingEngine @Inject constructor(
         _routingEvents.emit(event)
     }
 }
+
+/**
+ * A delivery acknowledgement received for a packet this node originated.
+ */
+data class AckEvent(
+    val originalPacketId: String,
+    val fromNodeId: String,
+    val receivedAt: Long
+)
 
 /**
  * Diagnostic events for the mesh debugging UI.

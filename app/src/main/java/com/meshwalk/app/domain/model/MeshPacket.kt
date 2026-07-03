@@ -27,7 +27,10 @@ data class MeshPacket(
     companion object {
         const val DEFAULT_TTL = 7
         const val MAX_TTL = 15
-        const val MAX_PAYLOAD_SIZE = 60_000 // ~60KB per packet
+        // Transport-level fragmentation (PacketFramer) splits packets that
+        // exceed the per-payload limit of the underlying transport, so this
+        // cap only bounds total packet size (e.g. image attachments).
+        const val MAX_PAYLOAD_SIZE = 256_000
 
         // Flags
         const val FLAG_ACK_REQUESTED = 0x01

@@ -34,7 +34,8 @@ class TransportManager @Inject constructor(
     private val nearbyTransport: NearbyConnectionsTransport,
     private val bleTransport: BleDiscoveryTransport,
     private val peerRepository: PeerRepository,
-    private val reconnectManager: ReconnectManager
+    private val reconnectManager: ReconnectManager,
+    private val packetFramer: PacketFramer
 ) : TransportManagerPort {
 
     companion object {
@@ -214,8 +215,7 @@ class TransportManager @Inject constructor(
             // We have a direct connection
             val transport = endpointTransportMap[endpointId]
             if (transport != null) {
-                val result = transport.sendData(endpointId, serialized)
-                if (result.isSuccess) {
+                if (sendFramed(transport, endpointId, serialized)) {
                     Timber.d("Packet ${packet.packetId} sent to $targetNodeId via ${transport.transportType}")
                     return true
                 }
@@ -225,8 +225,7 @@ class TransportManager @Inject constructor(
         // Try Nearby directly by nodeId
         val nearbyEndpoint = nearbyTransport.getEndpointForNodeId(targetNodeId)
         if (nearbyEndpoint != null) {
-            val result = nearbyTransport.sendData(nearbyEndpoint, serialized)
-            if (result.isSuccess) {
+            if (sendFramed(nearbyTransport, nearbyEndpoint, serialized)) {
                 Timber.d("Packet ${packet.packetId} sent to $targetNodeId via Nearby")
                 return true
             }
@@ -234,6 +233,36 @@ class TransportManager @Inject constructor(
 
         Timber.w("No route to $targetNodeId for packet ${packet.packetId}")
         return false
+    }
+
+    /**
+     * Send serialized packet bytes, splitting into fragment frames when they
+     * exceed the transport's per-payload limit. Returns true only when every
+     * frame was accepted by the transport.
+     */
+    private suspend fun sendFramed(
+        transport: MeshTransport,
+        endpointId: String,
+        serialized: ByteArray
+    ): Boolean {
+        if (!packetFramer.needsFragmentation(serialized)) {
+            return transport.sendData(endpointId, serialized).isSuccess
+        }
+        val frames = try {
+            packetFramer.split(serialized)
+        } catch (e: IllegalArgumentException) {
+            Timber.e(e, "Cannot fragment oversized payload (${serialized.size} bytes)")
+            return false
+        }
+        frames.forEachIndexed { i, frame ->
+            val result = transport.sendData(endpointId, frame)
+            if (result.isFailure) {
+                Timber.w("Fragment ${i + 1}/${frames.size} failed for $endpointId, aborting send")
+                return false
+            }
+        }
+        Timber.d("Sent ${serialized.size} bytes as ${frames.size} fragments to $endpointId")
+        return true
     }
 
     /**
@@ -250,9 +279,9 @@ class TransportManager @Inject constructor(
         connected.forEach { endpointId ->
             val nodeId = nearbyTransport.getNodeIdForEndpoint(endpointId)
             if (nodeId != excludeNodeId) {
-                nearbyTransport.sendData(endpointId, serialized).onSuccess {
+                if (sendFramed(nearbyTransport, endpointId, serialized)) {
                     successCount++
-                }.onFailure {
+                } else {
                     Timber.w("Failed to broadcast to $endpointId")
                 }
             }
@@ -384,6 +413,20 @@ class TransportManager @Inject constructor(
             }
 
             is TransportEvent.DataReceived -> {
+                // Fragment frame? Feed the reassembler; when the last fragment
+                // arrives, re-process the reassembled payload as a fresh
+                // DataReceived event (it may be an advertisement or a packet).
+                if (packetFramer.isFragmentFrame(event.data)) {
+                    val reassembled = packetFramer.accept(event.endpointId, event.data)
+                    if (reassembled != null) {
+                        val completeEvent = TransportEvent.DataReceived(event.endpointId, reassembled)
+                        if (!handleTransportEvent(completeEvent)) {
+                            _transportEvents.emit(completeEvent)
+                        }
+                    }
+                    return true // individual frames are never forwarded to routing
+                }
+
                 // Refresh lastSeen for the sending peer so they don't appear stale
                 val senderNodeId = nearbyTransport.getNodeIdForEndpoint(event.endpointId)
                 if (senderNodeId != null) {

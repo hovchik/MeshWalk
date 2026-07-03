@@ -11,6 +11,7 @@ import com.meshwalk.app.domain.model.ReactionEnvelope
 import com.meshwalk.app.domain.repository.MessageRepository
 import com.meshwalk.app.domain.repository.PeerRepository
 import com.meshwalk.app.domain.usecase.MeshOutboxPort
+import com.meshwalk.app.experimental.TimeToReachEstimator
 import com.meshwalk.app.routing.engine.MeshRoutingEngine
 import kotlinx.coroutines.*
 import timber.log.Timber
@@ -41,7 +42,8 @@ class MeshOutbox @Inject constructor(
     private val sessionManager: SessionManager,
     private val peerRepo: PeerRepository,
     private val routingEngine: MeshRoutingEngine,
-    private val messageRepo: MessageRepository
+    private val messageRepo: MessageRepository,
+    private val timeToReachEstimator: TimeToReachEstimator
 ) : MeshOutboxPort {
 
     private var retryScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -53,9 +55,22 @@ class MeshOutbox @Inject constructor(
     // when the abandoned-packets collector processes them.
     private val packetToMessage = ConcurrentHashMap<String, String>()
 
-    // Job collecting MeshRoutingEngine.abandonedPackets. Started by start() and
-    // cancelled by cancel() so that it doesn't outlive the mesh service.
+    /** A sent packet whose delivery ACK is still outstanding. */
+    private data class AckWait(
+        val messageId: String,
+        val recipientNodeId: String,
+        val sentAt: Long
+    )
+
+    // Sent packets awaiting a delivery ACK, keyed by packetId. Entries are
+    // removed when the ACK arrives, or pruned after ACK_WAIT_TTL_MS.
+    private val awaitingAck = ConcurrentHashMap<String, AckWait>()
+
+    // Jobs collecting MeshRoutingEngine.abandonedPackets / acksReceived.
+    // Started by start() and cancelled by cancel() so they don't outlive the
+    // mesh service.
     private var abandonedCollectorJob: Job? = null
+    private var ackCollectorJob: Job? = null
 
     /**
      * Begin collecting abandoned-packet events from the routing engine. When a
@@ -68,6 +83,7 @@ class MeshOutbox @Inject constructor(
         abandonedCollectorJob = scope.launch {
             routingEngine.abandonedPackets.collect { packetIds ->
                 for (packetId in packetIds) {
+                    awaitingAck.remove(packetId)
                     val messageId = packetToMessage.remove(packetId) ?: continue
                     try {
                         messageRepo.updateDeliveryStatus(messageId, DeliveryStatus.FAILED)
@@ -78,6 +94,33 @@ class MeshOutbox @Inject constructor(
                 }
             }
         }
+        ackCollectorJob?.cancel()
+        ackCollectorJob = scope.launch {
+            routingEngine.acksReceived.collect { ack ->
+                val wait = awaitingAck.remove(ack.originalPacketId) ?: return@collect
+                try {
+                    messageRepo.updateDeliveryStatus(wait.messageId, DeliveryStatus.DELIVERED)
+                    timeToReachEstimator.recordDelivery(
+                        peerNodeId = wait.recipientNodeId,
+                        sentAt = wait.sentAt,
+                        deliveredAt = ack.receivedAt
+                    )
+                    Timber.d("Message ${wait.messageId.take(8)} DELIVERED (ACK from ${ack.fromNodeId.take(8)})")
+                } catch (e: Exception) {
+                    Timber.e(e, "Failed to mark message ${wait.messageId.take(8)} DELIVERED")
+                }
+            }
+        }
+    }
+
+    /**
+     * Register a sent packet as awaiting its delivery ACK, pruning stale
+     * entries so unACKed packets can't grow the map forever.
+     */
+    private fun trackForAck(packetId: String, messageId: String, recipientNodeId: String) {
+        val cutoff = System.currentTimeMillis() - ACK_WAIT_TTL_MS
+        awaitingAck.entries.removeIf { it.value.sentAt < cutoff }
+        awaitingAck[packetId] = AckWait(messageId, recipientNodeId, System.currentTimeMillis())
     }
 
     /**
@@ -89,9 +132,12 @@ class MeshOutbox @Inject constructor(
     fun cancel() {
         abandonedCollectorJob?.cancel()
         abandonedCollectorJob = null
+        ackCollectorJob?.cancel()
+        ackCollectorJob = null
         retryScope.cancel()
         retryScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         packetToMessage.clear()
+        awaitingAck.clear()
     }
 
     override suspend fun enqueueMessage(message: MeshMessage, recipientNodeId: String) {
@@ -135,6 +181,9 @@ class MeshOutbox @Inject constructor(
             if (sent) {
                 packetToMessage.remove(packet.packetId)
                 messageRepo.updateDeliveryStatus(message.messageId, DeliveryStatus.SENT)
+                // The packet requests an ACK; when it arrives the message is
+                // upgraded to DELIVERED and the latency sample recorded.
+                trackForAck(packet.packetId, message.messageId, recipientNodeId)
             } else {
                 // Packet was queued for store-and-forward delivery.
                 // Keep status as PENDING so the MessageResendManager can pick it up
@@ -192,6 +241,8 @@ class MeshOutbox @Inject constructor(
         private const val KEY_EXCHANGE_POLL_INTERVAL_MS = 250L
         private const val MAX_AUTO_RETRIES = 3
         private val RETRY_DELAYS_MS = longArrayOf(3_000L, 5_000L, 8_000L)
+        /** How long a sent packet stays eligible for a DELIVERED upgrade via ACK. */
+        private const val ACK_WAIT_TTL_MS = 10 * 60 * 1000L
     }
 
     /** Thrown when the peer's exchange key has not arrived yet. */
@@ -369,6 +420,8 @@ class MeshOutbox @Inject constructor(
                 val sent = routingEngine.sendPacket(memberPacket)
                 if (sent) {
                     anySent = true
+                    // First member ACK upgrades the group message to DELIVERED.
+                    trackForAck(memberPacket.packetId, message.messageId, recipientNodeId)
                 } else {
                     Timber.w("Group packet ${memberPacket.packetId.take(8)} queued for ${recipientNodeId.take(8)}")
                 }
