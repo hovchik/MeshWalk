@@ -31,6 +31,14 @@ data class AppSettings(
     val autoRetryFailedMessages: Boolean = true,
     /** Enable read receipts. */
     val readReceiptsEnabled: Boolean = true,
+    /**
+     * Opportunistic internet bridge: when enabled and this node has internet,
+     * relay undeliverable queued packets through [internetBridgeUrl] and pull
+     * packets addressed to us. Off by default; requires a trusted relay URL.
+     */
+    val internetBridgeEnabled: Boolean = false,
+    /** Base URL of the relay server (e.g. https://relay.example.com). Empty = disabled. */
+    val internetBridgeUrl: String = "",
     /** Toggles for opt-in experimental features. */
     val experimental: ExperimentalFeatures = ExperimentalFeatures()
 )

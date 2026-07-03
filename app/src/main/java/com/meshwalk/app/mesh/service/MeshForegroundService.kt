@@ -46,6 +46,7 @@ class MeshForegroundService : Service() {
     @Inject lateinit var groupLifecycleManager: GroupLifecycleManager
     @Inject lateinit var peerRepository: com.meshwalk.app.domain.repository.PeerRepository
     @Inject lateinit var messageRepository: com.meshwalk.app.domain.repository.MessageRepository
+    @Inject lateinit var internetBridgeClient: com.meshwalk.app.transport.bridge.InternetBridgeClient
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     @Volatile private var meshStarted = false
@@ -105,6 +106,14 @@ class MeshForegroundService : Service() {
                 messageResendManager.start(identity.nodeId, serviceScope)
                 groupLifecycleManager.start(identity.nodeId, serviceScope)
                 transportManager.startMesh(advertisement)
+
+                // Optional internet bridge: relay queued packets and pull inbox
+                // when connectivity is available (no-op unless enabled + configured).
+                internetBridgeClient.onPacketFromBridge = { packet ->
+                    routingEngine.injectBridgePacket(packet)
+                }
+                internetBridgeClient.start(identity.nodeId, serviceScope)
+
                 meshStarted = true
                 Timber.d("Mesh started for node ${identity.nodeId}")
 
@@ -150,6 +159,7 @@ class MeshForegroundService : Service() {
             // onDestroy returns promptly even if stopMesh hangs.
             runBlocking(Dispatchers.IO) {
                 withTimeoutOrNull(3_000) {
+                    internetBridgeClient.stop()
                     transportManager.stopMesh()
                     routingEngine.stop()
                 }

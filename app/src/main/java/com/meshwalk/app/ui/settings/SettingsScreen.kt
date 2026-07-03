@@ -276,6 +276,43 @@ fun SettingsScreen(
         )
         HorizontalDivider()
 
+        // Internet bridge section
+        SectionHeader("Internet Bridge")
+        SwitchItem(
+            title = "Enable internet bridge",
+            subtitle = "Relay queued messages over the internet when available. " +
+                "The relay only sees encrypted packets.",
+            checked = state.settings.internetBridgeEnabled,
+            onToggle = {
+                viewModel.updateSettings {
+                    it.copy(internetBridgeEnabled = !it.internetBridgeEnabled)
+                }
+            }
+        )
+        if (state.settings.internetBridgeEnabled) {
+            var urlText by remember(state.settings.internetBridgeUrl) {
+                mutableStateOf(state.settings.internetBridgeUrl)
+            }
+            OutlinedTextField(
+                value = urlText,
+                onValueChange = { urlText = it },
+                label = { Text("Relay server URL") },
+                placeholder = { Text("https://relay.example.com") },
+                singleLine = true,
+                trailingIcon = {
+                    if (urlText != state.settings.internetBridgeUrl) {
+                        IconButton(onClick = {
+                            viewModel.updateSettings { it.copy(internetBridgeUrl = urlText.trim()) }
+                        }) { Icon(Icons.Filled.Check, "Save URL") }
+                    }
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 4.dp)
+            )
+        }
+        HorizontalDivider()
+
         // Data & Backup section
         SectionHeader("Data & Backup")
         ListItem(

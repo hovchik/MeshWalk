@@ -524,6 +524,8 @@ class SettingsRepositoryImpl @Inject constructor(
         private val HAPTIC_FEEDBACK = booleanPreferencesKey("haptic_feedback")
         private val AUTO_RETRY_FAILED = booleanPreferencesKey("auto_retry_failed")
         private val READ_RECEIPTS = booleanPreferencesKey("read_receipts")
+        private val INTERNET_BRIDGE_ENABLED = booleanPreferencesKey("internet_bridge_enabled")
+        private val INTERNET_BRIDGE_URL = stringPreferencesKey("internet_bridge_url")
         // Experimental feature toggles
         private val EXP_DROP_ZONES = booleanPreferencesKey("exp_drop_zones")
         private val EXP_RELAY_INCENTIVES = booleanPreferencesKey("exp_relay_incentives")
@@ -569,6 +571,8 @@ class SettingsRepositoryImpl @Inject constructor(
             prefs[HAPTIC_FEEDBACK] = settings.hapticFeedbackEnabled
             prefs[AUTO_RETRY_FAILED] = settings.autoRetryFailedMessages
             prefs[READ_RECEIPTS] = settings.readReceiptsEnabled
+            prefs[INTERNET_BRIDGE_ENABLED] = settings.internetBridgeEnabled
+            prefs[INTERNET_BRIDGE_URL] = settings.internetBridgeUrl
             val exp = settings.experimental
             prefs[EXP_DROP_ZONES] = exp.dropZonesEnabled
             prefs[EXP_RELAY_INCENTIVES] = exp.relayIncentivesEnabled
@@ -622,6 +626,8 @@ class SettingsRepositoryImpl @Inject constructor(
         hapticFeedbackEnabled = this[HAPTIC_FEEDBACK] ?: true,
         autoRetryFailedMessages = this[AUTO_RETRY_FAILED] ?: true,
         readReceiptsEnabled = this[READ_RECEIPTS] ?: true,
+        internetBridgeEnabled = this[INTERNET_BRIDGE_ENABLED] ?: false,
+        internetBridgeUrl = this[INTERNET_BRIDGE_URL] ?: "",
         experimental = ExperimentalFeatures(
             dropZonesEnabled = this[EXP_DROP_ZONES] ?: false,
             relayIncentivesEnabled = this[EXP_RELAY_INCENTIVES] ?: false,

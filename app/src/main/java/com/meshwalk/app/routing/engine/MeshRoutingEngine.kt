@@ -203,6 +203,17 @@ class MeshRoutingEngine @Inject constructor(
     }
 
     /**
+     * Inject a packet pulled from the internet bridge as though it arrived over
+     * the mesh. The synthetic endpoint id has no node mapping, so the routing
+     * table won't learn a bogus next-hop from it; dedup and delivery work
+     * exactly as for a transport-received packet.
+     */
+    suspend fun injectBridgePacket(packet: MeshPacket) {
+        if (!isRunning) return
+        handleIncomingPacket(packet, fromEndpointId = "internet-bridge")
+    }
+
+    /**
      * Handle a packet received from the transport layer.
      */
     private suspend fun handleIncomingPacket(packet: MeshPacket, fromEndpointId: String) {
