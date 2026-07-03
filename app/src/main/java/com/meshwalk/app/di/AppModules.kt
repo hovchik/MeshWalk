@@ -41,7 +41,8 @@ object DatabaseModule {
                 MeshWalkDatabase.MIGRATION_5_6,
                 MeshWalkDatabase.MIGRATION_6_7,
                 MeshWalkDatabase.MIGRATION_7_8,
-                MeshWalkDatabase.MIGRATION_8_9
+                MeshWalkDatabase.MIGRATION_8_9,
+                MeshWalkDatabase.MIGRATION_9_10
             )
             .fallbackToDestructiveMigration(dropAllTables = false)
             .build()

@@ -27,7 +27,7 @@ import com.meshwalk.app.data.local.entity.*
         PeerStatsEntity::class,
         RelayCounterEntity::class
     ],
-    version = 9,
+    version = 10,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -236,6 +236,17 @@ abstract class MeshWalkDatabase : RoomDatabase() {
                         lastUpdated INTEGER NOT NULL
                     )
                 """.trimIndent())
+            }
+        }
+
+        /**
+         * v9->v10: Disappearing messages (per-conversation TTL) and contact
+         * verification (peer isVerified flag).
+         */
+        val MIGRATION_9_10 = object : Migration(9, 10) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE conversations ADD COLUMN messageTtlMs INTEGER DEFAULT NULL")
+                db.execSQL("ALTER TABLE peers ADD COLUMN isVerified INTEGER NOT NULL DEFAULT 0")
             }
         }
     }

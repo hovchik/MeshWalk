@@ -166,6 +166,14 @@ class MessageRepositoryImpl @Inject constructor(
     override suspend fun searchAllMessages(query: String): List<MeshMessage> {
         return messageDao.searchAllMessages(query).map { it.toDomain() }
     }
+
+    override fun observeOutbox(): Flow<List<MeshMessage>> {
+        return messageDao.observeOutbox().map { entities -> entities.map { it.toDomain() } }
+    }
+
+    override suspend fun getAllMessages(): List<MeshMessage> {
+        return messageDao.getAll().map { it.toDomain() }
+    }
 }
 
 // ============================================================
@@ -242,6 +250,14 @@ class ConversationRepositoryImpl @Inject constructor(
     override fun observeTotalUnreadCount(): Flow<Int> {
         return conversationDao.observeTotalUnreadCount().map { it ?: 0 }
     }
+
+    override suspend fun updateMessageTtl(conversationId: String, ttlMs: Long?) {
+        conversationDao.updateMessageTtl(conversationId, ttlMs)
+    }
+
+    override suspend fun getAllConversations(): List<Conversation> {
+        return conversationDao.getAll().map { it.toDomain() }
+    }
 }
 
 // ============================================================
@@ -308,6 +324,10 @@ class PeerRepositoryImpl @Inject constructor(
 
     override suspend fun unblockPeer(nodeId: String) {
         blockedPeerDao.delete(nodeId)
+    }
+
+    override suspend fun setVerified(nodeId: String, isVerified: Boolean) {
+        peerDao.updateVerified(nodeId, isVerified)
     }
 
     override fun observeBlockedPeers(): Flow<List<BlockedPeer>> {

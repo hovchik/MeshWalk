@@ -112,7 +112,9 @@ class MeshInbox @Inject constructor(
         val localMessage = message.copy(
             conversationId = conversation.conversationId,
             deliveryStatus = DeliveryStatus.DELIVERED,
-            isDelayed = isDelayed
+            isDelayed = isDelayed,
+            // Apply this device's disappearing-messages timer for the conversation.
+            expiresAt = conversation.messageTtlMs?.let { System.currentTimeMillis() + it }
         )
 
         if (messageRepo.getMessageById(localMessage.messageId) != null) {
@@ -122,10 +124,7 @@ class MeshInbox @Inject constructor(
 
         messageRepo.saveMessage(localMessage)
 
-        val preview = when (localMessage.content) {
-            is MessageContent.Text -> localMessage.content.text
-            is MessageContent.SystemEvent -> localMessage.content.event
-        }
+        val preview = localMessage.content.previewText
         conversationRepo.updateLastMessage(conversation.conversationId, preview, localMessage.timestamp)
         conversationRepo.incrementUnread(conversation.conversationId)
 
@@ -178,10 +177,7 @@ class MeshInbox @Inject constructor(
         if (!target.isIncoming && target.senderNodeId == ourNodeId) {
             val senderPeer = peerRepo.getPeer(packet.sourceNodeId)
             val senderName = senderPeer?.displayName ?: packet.sourceNodeId.take(8)
-            val preview = when (val c = target.content) {
-                is MessageContent.Text -> c.text
-                is MessageContent.SystemEvent -> c.event
-            }.take(80)
+            val preview = target.content.previewText.take(80)
             notificationManager.showReactionNotification(
                 conversationId = target.conversationId,
                 senderName = senderName,
@@ -305,10 +301,12 @@ class MeshInbox @Inject constructor(
         // conversationId field in the decrypted envelope is not trusted here
         // because encrypted payloads from older senders or crafted packets
         // could carry an incorrect value.
+        val groupTtl = conversationRepo.getConversation(groupId)?.messageTtlMs
         val localMessage = message.copy(
             conversationId = groupId,
             deliveryStatus = DeliveryStatus.DELIVERED,
-            isDelayed = isDelayed
+            isDelayed = isDelayed,
+            expiresAt = groupTtl?.let { System.currentTimeMillis() + it }
         )
 
         if (messageRepo.getMessageById(localMessage.messageId) != null) {
@@ -318,10 +316,7 @@ class MeshInbox @Inject constructor(
 
         messageRepo.saveMessage(localMessage)
 
-        val preview = when (localMessage.content) {
-            is MessageContent.Text -> localMessage.content.text
-            is MessageContent.SystemEvent -> localMessage.content.event
-        }
+        val preview = localMessage.content.previewText
         conversationRepo.updateLastMessage(localMessage.conversationId, preview, localMessage.timestamp)
         conversationRepo.incrementUnread(localMessage.conversationId)
 

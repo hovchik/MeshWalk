@@ -37,6 +37,8 @@ object EntityMapper {
         senderNodeId = senderNodeId,
         content = when (contentType) {
             "system" -> MessageContent.SystemEvent(contentText)
+            "location" -> parseLocationContent(contentText)
+            "image" -> parseImageContent(contentText)
             else -> MessageContent.Text(contentText)
         },
         timestamp = timestamp,
@@ -58,10 +60,16 @@ object EntityMapper {
         contentType = when (content) {
             is MessageContent.Text -> "text"
             is MessageContent.SystemEvent -> "system"
+            is MessageContent.Location -> "location"
+            is MessageContent.Image -> "image"
         },
         contentText = when (content) {
             is MessageContent.Text -> content.text
             is MessageContent.SystemEvent -> content.event
+            is MessageContent.Location ->
+                "${content.latitude},${content.longitude},${content.accuracyMeters ?: ""}"
+            is MessageContent.Image ->
+                "${content.width},${content.height}:${content.base64Jpeg}"
         },
         timestamp = timestamp,
         deliveryStatus = deliveryStatus.name,
@@ -88,7 +96,8 @@ object EntityMapper {
         unreadCount = unreadCount,
         isEncrypted = isEncrypted,
         nickname = nickname?.takeIf { it.isNotEmpty() },
-        isFavorite = isFavorite
+        isFavorite = isFavorite,
+        messageTtlMs = messageTtlMs
     )
 
     fun Conversation.toEntity() = ConversationEntity(
@@ -103,7 +112,8 @@ object EntityMapper {
         unreadCount = unreadCount,
         isEncrypted = isEncrypted,
         nickname = nickname ?: "",
-        isFavorite = isFavorite
+        isFavorite = isFavorite,
+        messageTtlMs = messageTtlMs
     )
 
     // -- Peer --
@@ -119,7 +129,8 @@ object EntityMapper {
         lastSeen = lastSeen,
         isConnected = isConnected,
         relayCapable = relayCapable,
-        fingerprint = fingerprint
+        fingerprint = fingerprint,
+        isVerified = isVerified
     )
 
     fun PeerNode.toEntity() = PeerEntity(
@@ -134,7 +145,8 @@ object EntityMapper {
         lastSeen = lastSeen,
         isConnected = isConnected,
         relayCapable = relayCapable,
-        fingerprint = fingerprint
+        fingerprint = fingerprint,
+        isVerified = isVerified
     )
 
     // -- Routing --
@@ -182,6 +194,27 @@ object EntityMapper {
         version = version,
         maxMembers = maxMembers
     )
+
+    // -- Message content helpers (same encodings as the wire format) --
+
+    private fun parseLocationContent(body: String): MessageContent {
+        val fields = body.split(",", limit = 3)
+        val lat = fields.getOrNull(0)?.toDoubleOrNull()
+        val lng = fields.getOrNull(1)?.toDoubleOrNull()
+        if (lat == null || lng == null) return MessageContent.Text(body)
+        return MessageContent.Location(lat, lng, fields.getOrNull(2)?.toFloatOrNull())
+    }
+
+    private fun parseImageContent(body: String): MessageContent {
+        val sep = body.indexOf(':')
+        if (sep <= 0) return MessageContent.Text(body)
+        val dims = body.substring(0, sep).split(",", limit = 2)
+        return MessageContent.Image(
+            base64Jpeg = body.substring(sep + 1),
+            width = dims.getOrNull(0)?.toIntOrNull() ?: 0,
+            height = dims.getOrNull(1)?.toIntOrNull() ?: 0
+        )
+    }
 
     // -- Reactions JSON helpers --
     private fun parseReactionsJson(json: String): Map<String, String> {

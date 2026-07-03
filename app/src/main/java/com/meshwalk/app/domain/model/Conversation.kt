@@ -19,7 +19,13 @@ data class Conversation(
     /** User-assigned nickname for the peer (DIRECT conversations only). */
     val nickname: String? = null,
     /** Whether this conversation is marked as a favorite. */
-    val isFavorite: Boolean = false
+    val isFavorite: Boolean = false,
+    /**
+     * Disappearing-messages timer. When set, every message sent or received in
+     * this conversation expires (is deleted) this many ms after its timestamp.
+     * Null = messages are kept forever.
+     */
+    val messageTtlMs: Long? = null
 ) {
     /** Display title: nickname, group name, cached peer name, or truncated node ID. */
     val displayTitle: String

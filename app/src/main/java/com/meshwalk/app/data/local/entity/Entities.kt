@@ -62,7 +62,8 @@ data class ConversationEntity(
     @ColumnInfo(defaultValue = "")
     val nickname: String? = null,
     @ColumnInfo(defaultValue = "0")
-    val isFavorite: Boolean = false
+    val isFavorite: Boolean = false,
+    val messageTtlMs: Long? = null
 )
 
 @Entity(tableName = "peers")
@@ -78,7 +79,9 @@ data class PeerEntity(
     val lastSeen: Long,
     val isConnected: Boolean,
     val relayCapable: Boolean,
-    val fingerprint: String?
+    val fingerprint: String?,
+    @ColumnInfo(defaultValue = "0")
+    val isVerified: Boolean = false
 ) {
     override fun equals(other: Any?): Boolean {
         if (this === other) return true

@@ -28,9 +28,13 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import kotlin.math.roundToInt
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
@@ -60,7 +64,9 @@ class ChatViewModel @Inject constructor(
     private val sendMessage: SendMessageUseCase,
     private val sendGroupMessage: SendGroupMessageUseCase,
     private val groupControlManager: GroupControlManager,
-    private val meshOutbox: MeshOutboxPort
+    private val meshOutbox: MeshOutboxPort,
+    private val locationProvider: com.meshwalk.app.util.LocationProvider,
+    private val imageCodec: com.meshwalk.app.util.ImageAttachmentCodec
 ) : ViewModel() {
 
     private val conversationId: String = savedStateHandle["conversationId"] ?: ""
@@ -83,7 +89,8 @@ class ChatViewModel @Inject constructor(
         val pinnedMessages: List<MeshMessage> = emptyList(),
         val searchResults: List<MeshMessage> = emptyList(),
         val isSearching: Boolean = false,
-        val replyToMessage: MeshMessage? = null
+        val replyToMessage: MeshMessage? = null,
+        val messageTtlMs: Long? = null
     )
 
     private val _state = MutableStateFlow(UiState())
@@ -133,6 +140,9 @@ class ChatViewModel @Inject constructor(
 
             // Clear unread
             conversationRepo.clearUnread(conversationId)
+            _state.value = _state.value.copy(
+                messageTtlMs = conversationRepo.getConversation(conversationId)?.messageTtlMs
+            )
         }
 
         // Observe settings
@@ -194,6 +204,49 @@ class ChatViewModel @Inject constructor(
         }
     }
 
+    /** Shared send path for non-text content (location, image). */
+    private fun sendContent(content: MessageContent) {
+        viewModelScope.launch {
+            _state.value = _state.value.copy(sendError = null)
+            try {
+                if (_state.value.isGroupChat) {
+                    sendGroupMessage(conversationId, content, _state.value.selfNodeId)
+                } else {
+                    sendMessage(conversationId, peerNodeId, content, _state.value.selfNodeId)
+                }
+            } catch (e: Exception) {
+                _state.value = _state.value.copy(sendError = e.message ?: "Failed to send")
+            }
+        }
+    }
+
+    fun shareLocation() {
+        val pos = locationProvider.getLastKnownPosition()
+        if (pos == null) {
+            _state.value = _state.value.copy(
+                sendError = "Location unavailable — enable location and grant permission"
+            )
+            return
+        }
+        sendContent(MessageContent.Location(pos.latitude, pos.longitude, pos.accuracyMeters))
+    }
+
+    fun sendImage(uri: android.net.Uri) {
+        viewModelScope.launch {
+            _state.value = _state.value.copy(sendError = null)
+            val encoded = withContext(kotlinx.coroutines.Dispatchers.Default) {
+                imageCodec.encodeFromUri(uri)
+            }
+            if (encoded == null) {
+                _state.value = _state.value.copy(sendError = "Couldn't attach that image")
+                return@launch
+            }
+            sendContent(encoded)
+        }
+    }
+
+    fun decodeImage(content: MessageContent.Image) = imageCodec.decodeToBitmap(content)
+
     fun addMember(memberNodeId: String) {
         viewModelScope.launch {
             try {
@@ -249,10 +302,8 @@ class ChatViewModel @Inject constructor(
                 // Reset status to PENDING before retrying
                 messageRepo.updateDeliveryStatus(message.messageId, DeliveryStatus.PENDING)
 
-                val text = when (val content = message.content) {
-                    is MessageContent.Text -> content.text
-                    is MessageContent.SystemEvent -> return@launch // Don't resend system events
-                }
+                // Don't resend system events; all other content types resend as-is.
+                if (message.content is MessageContent.SystemEvent) return@launch
 
                 if (_state.value.isGroupChat) {
                     val group = groupRepo.getGroup(message.conversationId) ?: return@launch
@@ -273,6 +324,14 @@ class ChatViewModel @Inject constructor(
 
     fun clearSendError() {
         _state.value = _state.value.copy(sendError = null)
+    }
+
+    /** Set the disappearing-messages timer for this conversation (null disables it). */
+    fun setMessageTtl(ttlMs: Long?) {
+        viewModelScope.launch {
+            conversationRepo.updateMessageTtl(conversationId, ttlMs)
+            _state.value = _state.value.copy(messageTtlMs = ttlMs)
+        }
     }
 
     fun addReaction(message: MeshMessage, emoji: String) {
@@ -330,10 +389,7 @@ class ChatViewModel @Inject constructor(
                 }
                 // If replying, update the sent message with reply-to fields
                 if (replyTo != null) {
-                    val preview = when (val c = replyTo.content) {
-                        is MessageContent.Text -> c.text.take(80)
-                        is MessageContent.SystemEvent -> c.event.take(80)
-                    }
+                    val preview = replyTo.content.previewText.take(80)
                     val updated = sentMsg.copy(
                         replyToMessageId = replyTo.messageId,
                         replyToPreview = preview
@@ -375,11 +431,17 @@ fun ChatScreen(
     var searchQuery by remember { mutableStateOf("") }
     var showPinnedBanner by remember { mutableStateOf(false) }
     var contextMenuMessage by remember { mutableStateOf<MeshMessage?>(null) }
+    var showOverflowMenu by remember { mutableStateOf(false) }
+    var showTtlDialog by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
     val snackbarHostState = remember { SnackbarHostState() }
     val keyboardController = LocalSoftwareKeyboardController.current
     val clipboardManager = LocalClipboardManager.current
     val scope = rememberCoroutineScope()
+
+    val imagePicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.GetContent()
+    ) { uri -> uri?.let { viewModel.sendImage(it) } }
 
     // Auto-scroll to bottom on new messages
     LaunchedEffect(state.messages.size) {
@@ -466,6 +528,30 @@ fun ChatScreen(
                             Icon(Icons.Filled.Settings, "Group settings")
                         }
                     }
+                    Box {
+                        IconButton(onClick = { showOverflowMenu = true }) {
+                            Icon(Icons.Filled.MoreVert, "More")
+                        }
+                        DropdownMenu(
+                            expanded = showOverflowMenu,
+                            onDismissRequest = { showOverflowMenu = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        if (state.messageTtlMs != null)
+                                            "Disappearing: ${formatTtl(state.messageTtlMs)}"
+                                        else "Disappearing messages"
+                                    )
+                                },
+                                leadingIcon = { Icon(Icons.Filled.TimerOff, null) },
+                                onClick = {
+                                    showOverflowMenu = false
+                                    showTtlDialog = true
+                                }
+                            )
+                        }
+                    }
                 }
             )
         }
@@ -517,10 +603,7 @@ fun ChatScreen(
                     Column(modifier = Modifier.padding(8.dp)) {
                         Text("${state.searchResults.size} results", style = MaterialTheme.typography.labelSmall)
                         state.searchResults.take(5).forEach { msg ->
-                            val preview = when (val c = msg.content) {
-                                is MessageContent.Text -> c.text.take(60)
-                                is MessageContent.SystemEvent -> c.event.take(60)
-                            }
+                            val preview = msg.content.previewText.take(60)
                             Text(
                                 text = "${TimeUtils.formatTimestamp(msg.timestamp)}: $preview",
                                 style = MaterialTheme.typography.bodySmall,
@@ -555,10 +638,7 @@ fun ChatScreen(
                         AnimatedVisibility(visible = showPinnedBanner) {
                             Column(modifier = Modifier.padding(top = 4.dp)) {
                                 state.pinnedMessages.forEach { pinned ->
-                                    val preview = when (val c = pinned.content) {
-                                        is MessageContent.Text -> c.text.take(80)
-                                        is MessageContent.SystemEvent -> c.event.take(80)
-                                    }
+                                    val preview = pinned.content.previewText.take(80)
                                     Text(
                                         text = preview,
                                         style = MaterialTheme.typography.bodySmall,
@@ -601,7 +681,8 @@ fun ChatScreen(
                             System.currentTimeMillis() - message.timestamp > 10_000L) {
                             { viewModel.resendMessage(message) }
                         } else null,
-                        onLongPress = { contextMenuMessage = message }
+                        onLongPress = { contextMenuMessage = message },
+                        decodeImage = { viewModel.decodeImage(it) }
                     )
                 }
             }
@@ -645,10 +726,7 @@ fun ChatScreen(
                         Column(modifier = Modifier.weight(1f)) {
                             Text("Reply to", style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.primary)
-                            val preview = when (val c = replyMsg.content) {
-                                is MessageContent.Text -> c.text.take(60)
-                                is MessageContent.SystemEvent -> c.event.take(60)
-                            }
+                            val preview = replyMsg.content.previewText.take(60)
                             Text(preview, style = MaterialTheme.typography.bodySmall,
                                 maxLines = 1, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
@@ -669,6 +747,37 @@ fun ChatScreen(
                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
+                        var showAttachMenu by remember { mutableStateOf(false) }
+                        Box {
+                            IconButton(onClick = { showAttachMenu = true }) {
+                                Icon(
+                                    Icons.Filled.AddCircleOutline,
+                                    contentDescription = "Attach",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            DropdownMenu(
+                                expanded = showAttachMenu,
+                                onDismissRequest = { showAttachMenu = false }
+                            ) {
+                                DropdownMenuItem(
+                                    text = { Text("Photo") },
+                                    leadingIcon = { Icon(Icons.Filled.Image, null) },
+                                    onClick = {
+                                        showAttachMenu = false
+                                        imagePicker.launch("image/*")
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Location") },
+                                    leadingIcon = { Icon(Icons.Filled.LocationOn, null) },
+                                    onClick = {
+                                        showAttachMenu = false
+                                        viewModel.shareLocation()
+                                    }
+                                )
+                            }
+                        }
                         IconButton(onClick = {
                             showEmojiPicker = !showEmojiPicker
                             if (showEmojiPicker) keyboardController?.hide()
@@ -725,6 +834,17 @@ fun ChatScreen(
         }
     }
 
+    if (showTtlDialog) {
+        DisappearingMessagesDialog(
+            current = state.messageTtlMs,
+            onSelect = {
+                viewModel.setMessageTtl(it)
+                showTtlDialog = false
+            },
+            onDismiss = { showTtlDialog = false }
+        )
+    }
+
     if (showGroupSettings) {
         GroupSettingsDialog(
             groupName = state.peerName ?: "",
@@ -779,6 +899,8 @@ fun ChatScreen(
                     val copyableText = when (val c = msg.content) {
                         is MessageContent.Text -> c.text
                         is MessageContent.SystemEvent -> c.event
+                        is MessageContent.Location -> "${c.latitude}, ${c.longitude}"
+                        is MessageContent.Image -> ""
                     }
                     TextButton(
                         onClick = {
@@ -832,6 +954,57 @@ fun ChatScreen(
             }
         )
     }
+}
+
+/** Options for the disappearing-messages timer, in milliseconds (null = Off). */
+private val TTL_OPTIONS: List<Pair<String, Long?>> = listOf(
+    "Off" to null,
+    "30 seconds" to 30_000L,
+    "5 minutes" to 5 * 60_000L,
+    "1 hour" to 60 * 60_000L,
+    "1 day" to 24 * 60 * 60_000L,
+    "1 week" to 7 * 24 * 60 * 60_000L
+)
+
+private fun formatTtl(ttlMs: Long?): String =
+    TTL_OPTIONS.firstOrNull { it.second == ttlMs }?.first ?: "custom"
+
+@Composable
+private fun DisappearingMessagesDialog(
+    current: Long?,
+    onSelect: (Long?) -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Disappearing Messages") },
+        text = {
+            Column {
+                Text(
+                    "New messages in this chat will be deleted after the selected time.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                TTL_OPTIONS.forEach { (label, ttl) ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onSelect(ttl) }
+                            .padding(vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        RadioButton(selected = current == ttl, onClick = { onSelect(ttl) })
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(label)
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Done") }
+        }
+    )
 }
 
 @Composable
@@ -990,7 +1163,8 @@ private fun MessageBubble(
     senderName: String? = null,
     onResend: (() -> Unit)? = null,
     onRetry: (() -> Unit)? = null,
-    onLongPress: (() -> Unit)? = null
+    onLongPress: (() -> Unit)? = null,
+    decodeImage: (MessageContent.Image) -> android.graphics.Bitmap? = { null }
 ) {
     val alignment = if (isOutgoing) Alignment.CenterEnd else Alignment.CenterStart
     val bubbleColor = if (message.isDelayed && message.isIncoming) {
@@ -1110,6 +1284,8 @@ private fun MessageBubble(
                             style = MaterialTheme.typography.bodySmall
                         )
                     }
+                    is MessageContent.Location -> LocationContent(content, textColor)
+                    is MessageContent.Image -> ImageContent(content, decodeImage)
                 }
 
                 Spacer(modifier = Modifier.height(2.dp))
@@ -1210,6 +1386,72 @@ private fun MessageBubble(
         }
     }
     } // close outer Column
+}
+
+@Composable
+private fun LocationContent(
+    content: MessageContent.Location,
+    textColor: androidx.compose.ui.graphics.Color
+) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.clickable {
+            val uri = android.net.Uri.parse(
+                "geo:${content.latitude},${content.longitude}?q=${content.latitude},${content.longitude}(Shared location)"
+            )
+            try {
+                context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, uri))
+            } catch (_: Exception) { /* no maps app installed */ }
+        }
+    ) {
+        Icon(
+            Icons.Filled.LocationOn,
+            contentDescription = null,
+            tint = textColor,
+            modifier = Modifier.size(28.dp)
+        )
+        Spacer(modifier = Modifier.width(8.dp))
+        Column {
+            Text("Shared location", color = textColor, style = MaterialTheme.typography.bodyMedium)
+            Text(
+                "%.5f, %.5f".format(content.latitude, content.longitude),
+                color = textColor.copy(alpha = 0.7f),
+                style = MaterialTheme.typography.labelSmall
+            )
+            content.accuracyMeters?.let {
+                Text(
+                    "±${it.roundToInt()}m • tap to open map",
+                    color = textColor.copy(alpha = 0.5f),
+                    style = MaterialTheme.typography.labelSmall
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ImageContent(
+    content: MessageContent.Image,
+    decodeImage: (MessageContent.Image) -> android.graphics.Bitmap?
+) {
+    val bitmap = remember(content.base64Jpeg) { decodeImage(content) }
+    if (bitmap != null) {
+        androidx.compose.foundation.Image(
+            bitmap = bitmap.asImageBitmap(),
+            contentDescription = "Shared photo",
+            modifier = Modifier
+                .heightIn(max = 240.dp)
+                .clip(RoundedCornerShape(12.dp)),
+            contentScale = androidx.compose.ui.layout.ContentScale.Fit
+        )
+    } else {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Filled.BrokenImage, contentDescription = null, modifier = Modifier.size(24.dp))
+            Spacer(modifier = Modifier.width(6.dp))
+            Text("Image unavailable", style = MaterialTheme.typography.bodySmall)
+        }
+    }
 }
 
 @Composable

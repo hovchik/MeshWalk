@@ -154,9 +154,9 @@ class GroupLifecycleManager @Inject constructor(
     private suspend fun collectGroupMessages(groupId: String): List<MessageData> {
         val messages = messageRepo.observeMessages(groupId).first()
         return messages.map { msg ->
-            val text = when (msg.content) {
-                is MessageContent.Text -> msg.content.text
-                is MessageContent.SystemEvent -> "[system] ${msg.content.event}"
+            val text = when (val c = msg.content) {
+                is MessageContent.SystemEvent -> "[system] ${c.event}"
+                else -> c.previewText
             }
             MessageData(
                 messageId = msg.messageId,

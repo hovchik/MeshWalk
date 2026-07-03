@@ -308,9 +308,11 @@ class MessageEnvelopeManager @Inject constructor(
     }
 
     private fun serializeMessage(message: MeshMessage): ByteArray {
-        val content = when (message.content) {
-            is MessageContent.Text -> "T:${message.content.text}"
-            is MessageContent.SystemEvent -> "S:${message.content.event}"
+        val content = when (val c = message.content) {
+            is MessageContent.Text -> "T:${c.text}"
+            is MessageContent.SystemEvent -> "S:${c.event}"
+            is MessageContent.Location -> "L:${c.latitude},${c.longitude},${c.accuracyMeters ?: ""}"
+            is MessageContent.Image -> "I:${c.width},${c.height}:${c.base64Jpeg}"
         }
         val payload = "${message.messageId}|${message.conversationId}|${message.timestamp}|$content"
         return payload.toByteArray(Charsets.UTF_8)
@@ -323,6 +325,8 @@ class MessageEnvelopeManager @Inject constructor(
         val content = when {
             parts[3].startsWith("T:") -> MessageContent.Text(parts[3].removePrefix("T:"))
             parts[3].startsWith("S:") -> MessageContent.SystemEvent(parts[3].removePrefix("S:"))
+            parts[3].startsWith("L:") -> parseLocation(parts[3].removePrefix("L:"))
+            parts[3].startsWith("I:") -> parseImage(parts[3].removePrefix("I:"))
             else -> MessageContent.Text(parts[3])
         }
 
@@ -334,6 +338,31 @@ class MessageEnvelopeManager @Inject constructor(
             timestamp = parts[2].toLongOrNull() ?: System.currentTimeMillis(),
             isIncoming = true,
             hopCount = packet.hopCount
+        )
+    }
+
+    /** Parse "lat,lng,acc" (acc may be empty). Falls back to Text on malformed input. */
+    private fun parseLocation(body: String): MessageContent {
+        val fields = body.split(",", limit = 3)
+        val lat = fields.getOrNull(0)?.toDoubleOrNull()
+        val lng = fields.getOrNull(1)?.toDoubleOrNull()
+        if (lat == null || lng == null) return MessageContent.Text(body)
+        return MessageContent.Location(
+            latitude = lat,
+            longitude = lng,
+            accuracyMeters = fields.getOrNull(2)?.toFloatOrNull()
+        )
+    }
+
+    /** Parse "w,h:base64". Falls back to Text on malformed input. */
+    private fun parseImage(body: String): MessageContent {
+        val sep = body.indexOf(':')
+        if (sep <= 0) return MessageContent.Text(body)
+        val dims = body.substring(0, sep).split(",", limit = 2)
+        return MessageContent.Image(
+            base64Jpeg = body.substring(sep + 1),
+            width = dims.getOrNull(0)?.toIntOrNull() ?: 0,
+            height = dims.getOrNull(1)?.toIntOrNull() ?: 0
         )
     }
 

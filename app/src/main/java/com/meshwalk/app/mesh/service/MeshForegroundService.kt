@@ -45,6 +45,7 @@ class MeshForegroundService : Service() {
     @Inject lateinit var messageResendManager: MessageResendManager
     @Inject lateinit var groupLifecycleManager: GroupLifecycleManager
     @Inject lateinit var peerRepository: com.meshwalk.app.domain.repository.PeerRepository
+    @Inject lateinit var messageRepository: com.meshwalk.app.domain.repository.MessageRepository
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     @Volatile private var meshStarted = false
@@ -106,6 +107,18 @@ class MeshForegroundService : Service() {
                 transportManager.startMesh(advertisement)
                 meshStarted = true
                 Timber.d("Mesh started for node ${identity.nodeId}")
+
+                // Disappearing messages: periodically delete expired messages.
+                serviceScope.launch {
+                    while (isActive) {
+                        try {
+                            messageRepository.deleteExpiredMessages()
+                        } catch (e: Exception) {
+                            Timber.w(e, "Expired-message sweep failed")
+                        }
+                        delay(60_000)
+                    }
+                }
 
                 // Observe identity changes to re-advertise when the user renames
                 identityRepository.observeActiveIdentity()

@@ -24,16 +24,25 @@ class SendMessageUseCase @Inject constructor(
         recipientNodeId: String,
         text: String,
         senderNodeId: String
+    ): MeshMessage = invoke(conversationId, recipientNodeId, MessageContent.Text(text), senderNodeId)
+
+    suspend operator fun invoke(
+        conversationId: String,
+        recipientNodeId: String,
+        content: MessageContent,
+        senderNodeId: String
     ): MeshMessage {
+        val ttl = conversationRepo.getConversation(conversationId)?.messageTtlMs
         val message = MeshMessage(
             conversationId = conversationId,
             senderNodeId = senderNodeId,
-            content = MessageContent.Text(text),
+            content = content,
             isIncoming = false,
-            deliveryStatus = DeliveryStatus.PENDING
+            deliveryStatus = DeliveryStatus.PENDING,
+            expiresAt = ttl?.let { System.currentTimeMillis() + it }
         )
         messageRepo.saveMessage(message)
-        conversationRepo.updateLastMessage(conversationId, text, message.timestamp)
+        conversationRepo.updateLastMessage(conversationId, content.previewText, message.timestamp)
         try {
             meshOutbox.enqueueMessage(message, recipientNodeId)
         } catch (e: Exception) {
@@ -55,19 +64,27 @@ class SendGroupMessageUseCase @Inject constructor(
         groupId: String,
         text: String,
         senderNodeId: String
+    ): MeshMessage = invoke(groupId, MessageContent.Text(text), senderNodeId)
+
+    suspend operator fun invoke(
+        groupId: String,
+        content: MessageContent,
+        senderNodeId: String
     ): MeshMessage {
         val group = groupRepo.getGroup(groupId)
             ?: throw IllegalArgumentException("Group not found: $groupId")
 
+        val ttl = conversationRepo.getConversation(groupId)?.messageTtlMs
         val message = MeshMessage(
             conversationId = groupId,
             senderNodeId = senderNodeId,
-            content = MessageContent.Text(text),
+            content = content,
             isIncoming = false,
-            deliveryStatus = DeliveryStatus.PENDING
+            deliveryStatus = DeliveryStatus.PENDING,
+            expiresAt = ttl?.let { System.currentTimeMillis() + it }
         )
         messageRepo.saveMessage(message)
-        conversationRepo.updateLastMessage(groupId, text, message.timestamp)
+        conversationRepo.updateLastMessage(groupId, content.previewText, message.timestamp)
 
         // Fan-out: enqueue the same encrypted message for each group member
         val recipientNodeIds = group.members

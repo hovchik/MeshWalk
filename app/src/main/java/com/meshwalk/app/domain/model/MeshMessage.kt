@@ -31,6 +31,29 @@ data class MeshMessage(
 sealed interface MessageContent {
     data class Text(val text: String) : MessageContent
     data class SystemEvent(val event: String) : MessageContent
+
+    /** A shared geographic position (one-shot location share). */
+    data class Location(
+        val latitude: Double,
+        val longitude: Double,
+        val accuracyMeters: Float? = null
+    ) : MessageContent
+
+    /** An inline image attachment, downscaled and JPEG-compressed by the sender. */
+    data class Image(
+        val base64Jpeg: String,
+        val width: Int = 0,
+        val height: Int = 0
+    ) : MessageContent
+
+    /** Short human-readable preview for conversation lists, notifications, and replies. */
+    val previewText: String
+        get() = when (this) {
+            is Text -> text
+            is SystemEvent -> event
+            is Location -> "📍 Location"
+            is Image -> "📷 Photo"
+        }
 }
 
 /**

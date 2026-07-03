@@ -18,6 +18,9 @@ interface MessageRepository {
     suspend fun updateDeliveryStatus(messageId: String, status: DeliveryStatus)
     fun observeMessages(conversationId: String): Flow<List<MeshMessage>>
     fun observeRecentMessages(conversationId: String, limit: Int): Flow<List<MeshMessage>>
+    /** Outgoing messages still awaiting delivery (PENDING or FAILED), newest first. */
+    fun observeOutbox(): Flow<List<MeshMessage>>
+    suspend fun getAllMessages(): List<MeshMessage>
     suspend fun getUndeliveredMessages(): List<MeshMessage>
     suspend fun deleteMessage(messageId: String)
     suspend fun deleteMessagesByConversation(conversationId: String)
@@ -45,6 +48,9 @@ interface ConversationRepository {
     suspend fun updateNickname(conversationId: String, nickname: String?)
     suspend fun toggleFavorite(conversationId: String, isFavorite: Boolean)
     fun observeTotalUnreadCount(): Flow<Int>
+    /** Set the disappearing-messages timer; null disables it. */
+    suspend fun updateMessageTtl(conversationId: String, ttlMs: Long?)
+    suspend fun getAllConversations(): List<Conversation>
 }
 
 interface PeerRepository {
@@ -59,6 +65,8 @@ interface PeerRepository {
     suspend fun blockPeer(nodeId: String, displayName: String?)
     suspend fun unblockPeer(nodeId: String)
     fun observeBlockedPeers(): Flow<List<BlockedPeer>>
+    /** Mark a peer's key fingerprint as manually verified (or revoke it). */
+    suspend fun setVerified(nodeId: String, isVerified: Boolean)
 }
 
 data class BlockedPeer(

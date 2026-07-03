@@ -51,6 +51,12 @@ interface MessageDao {
     @Query("SELECT * FROM messages WHERE deliveryStatus IN ('PENDING', 'SENT')")
     suspend fun getUndelivered(): List<MessageEntity>
 
+    @Query("SELECT * FROM messages WHERE deliveryStatus IN ('PENDING', 'FAILED') AND isIncoming = 0 ORDER BY timestamp DESC")
+    fun observeOutbox(): Flow<List<MessageEntity>>
+
+    @Query("SELECT * FROM messages ORDER BY timestamp ASC")
+    suspend fun getAll(): List<MessageEntity>
+
     @Query("SELECT * FROM messages WHERE messageId = :messageId")
     suspend fun getById(messageId: String): MessageEntity?
 
@@ -96,6 +102,9 @@ interface ConversationDao {
     @Query("SELECT * FROM conversations ORDER BY lastMessageAt DESC")
     fun observeAll(): Flow<List<ConversationEntity>>
 
+    @Query("SELECT * FROM conversations")
+    suspend fun getAll(): List<ConversationEntity>
+
     @Query("UPDATE conversations SET lastMessageAt = :timestamp, lastMessagePreview = :preview WHERE conversationId = :id")
     suspend fun updateLastMessage(id: String, preview: String, timestamp: Long)
 
@@ -123,6 +132,9 @@ interface ConversationDao {
     @Query("UPDATE conversations SET isFavorite = :isFavorite WHERE conversationId = :id")
     suspend fun updateFavorite(id: String, isFavorite: Boolean)
 
+    @Query("UPDATE conversations SET messageTtlMs = :ttlMs WHERE conversationId = :id")
+    suspend fun updateMessageTtl(id: String, ttlMs: Long?)
+
     @Query("SELECT SUM(unreadCount) FROM conversations")
     fun observeTotalUnreadCount(): Flow<Int?>
 }
@@ -149,6 +161,9 @@ interface PeerDao {
 
     @Query("UPDATE peers SET isConnected = 0")
     suspend fun resetAllConnectionStates()
+
+    @Query("UPDATE peers SET isVerified = :isVerified WHERE nodeId = :nodeId")
+    suspend fun updateVerified(nodeId: String, isVerified: Boolean)
 }
 
 @Dao

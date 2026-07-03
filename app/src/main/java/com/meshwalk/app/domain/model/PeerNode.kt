@@ -15,9 +15,23 @@ data class PeerNode(
     val lastSeen: Long = System.currentTimeMillis(),
     val isConnected: Boolean = false,
     val relayCapable: Boolean = true,
-    val fingerprint: String? = null
+    val fingerprint: String? = null,
+    /** True once the user has manually verified this peer's key fingerprint. */
+    val isVerified: Boolean = false
 ) {
     val isDirect: Boolean get() = hopCount == 0
+
+    /**
+     * Human-comparable safety number derived from the peer's exchange key.
+     * Both sides display the same blocks when the keys match (no MITM).
+     */
+    val safetyNumber: String?
+        get() = publicExchangeKey?.let { key ->
+            val digest = java.security.MessageDigest.getInstance("SHA-256").digest(key)
+            digest.take(12).chunked(2).joinToString(" ") { pair ->
+                "%02X%02X".format(pair[0], pair[1])
+            }
+        }
 
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
