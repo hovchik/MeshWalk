@@ -53,7 +53,9 @@ class SettingsViewModel @Inject constructor(
     private val transportManager: TransportManagerPort,
     val featureGate: FeatureGate,
     private val billingManager: BillingManager,
-    private val peerRepo: PeerRepository
+    private val peerRepo: PeerRepository,
+    private val backupManager: com.meshwalk.app.data.backup.BackupManager,
+    @dagger.hilt.android.qualifiers.ApplicationContext private val appContext: android.content.Context
 ) : ViewModel() {
 
     data class UiState(
@@ -63,7 +65,9 @@ class SettingsViewModel @Inject constructor(
         val subscriptionState: SubscriptionState = SubscriptionState(),
         val availablePlans: List<PlanDetails> = emptyList(),
         val peerCount: Int = 0,
-        val connectedPeerCount: Int = 0
+        val connectedPeerCount: Int = 0,
+        val backupMessage: String? = null,
+        val backupInProgress: Boolean = false
     )
 
     private val _state = MutableStateFlow(UiState())
@@ -131,6 +135,52 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun getManageSubscriptionIntent() = billingManager.getManageSubscriptionIntent()
+
+    /** Write an encrypted backup to the user-picked [uri]. */
+    fun exportBackup(uri: android.net.Uri, passphrase: String) {
+        viewModelScope.launch {
+            _state.update { it.copy(backupInProgress = true, backupMessage = null) }
+            val result = runCatching {
+                val blob = backupManager.export(passphrase)
+                appContext.contentResolver.openOutputStream(uri)?.use { it.write(blob) }
+                    ?: error("Couldn't open the selected file for writing")
+            }
+            _state.update {
+                it.copy(
+                    backupInProgress = false,
+                    backupMessage = result.fold(
+                        onSuccess = { "Backup saved" },
+                        onFailure = { e -> "Backup failed: ${e.message}" }
+                    )
+                )
+            }
+        }
+    }
+
+    /** Restore an encrypted backup from the user-picked [uri]. */
+    fun importBackup(uri: android.net.Uri, passphrase: String) {
+        viewModelScope.launch {
+            _state.update { it.copy(backupInProgress = true, backupMessage = null) }
+            val result = runCatching {
+                val blob = appContext.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                    ?: error("Couldn't open the selected file for reading")
+                backupManager.import(blob, passphrase)
+            }
+            _state.update {
+                it.copy(
+                    backupInProgress = false,
+                    backupMessage = result.fold(
+                        onSuccess = { "Backup restored — restart the app to load it" },
+                        onFailure = { e -> "Restore failed: ${e.message}" }
+                    )
+                )
+            }
+        }
+    }
+
+    fun clearBackupMessage() {
+        _state.update { it.copy(backupMessage = null) }
+    }
 }
 
 @Composable
@@ -142,8 +192,40 @@ fun SettingsScreen(
 ) {
     val state by viewModel.state.collectAsState()
     var showEditProfileDialog by remember { mutableStateOf(false) }
+    var backupPassphraseDialog by remember { mutableStateOf<BackupDialogMode?>(null) }
+    var pendingRestoreUri by remember { mutableStateOf<android.net.Uri?>(null) }
 
     val context = LocalContext.current
+
+    val createBackupLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.CreateDocument("application/octet-stream")
+    ) { uri -> if (uri != null) backupPassphraseDialog = BackupDialogMode.Export(uri) }
+
+    val openBackupLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.OpenDocument()
+    ) { uri -> if (uri != null) backupPassphraseDialog = BackupDialogMode.Import(uri) }
+
+    LaunchedEffect(state.backupMessage) {
+        state.backupMessage?.let {
+            android.widget.Toast.makeText(context, it, android.widget.Toast.LENGTH_LONG).show()
+            viewModel.clearBackupMessage()
+        }
+    }
+
+    backupPassphraseDialog?.let { mode ->
+        BackupPassphraseDialog(
+            isExport = mode is BackupDialogMode.Export,
+            inProgress = state.backupInProgress,
+            onConfirm = { passphrase ->
+                when (mode) {
+                    is BackupDialogMode.Export -> viewModel.exportBackup(mode.uri, passphrase)
+                    is BackupDialogMode.Import -> viewModel.importBackup(mode.uri, passphrase)
+                }
+                backupPassphraseDialog = null
+            },
+            onDismiss = { backupPassphraseDialog = null }
+        )
+    }
 
     Column(
         modifier = Modifier.verticalScroll(rememberScrollState())
@@ -180,6 +262,26 @@ fun SettingsScreen(
                 }
             )
         }
+        HorizontalDivider()
+
+        // Data & Backup section
+        SectionHeader("Data & Backup")
+        ListItem(
+            modifier = Modifier.clickable(enabled = !state.backupInProgress) {
+                createBackupLauncher.launch("meshwalk-backup.mwbk")
+            },
+            headlineContent = { Text("Export encrypted backup") },
+            supportingContent = { Text("Save your identity and chats to an encrypted file") },
+            leadingContent = { Icon(Icons.Filled.Upload, null) }
+        )
+        ListItem(
+            modifier = Modifier.clickable(enabled = !state.backupInProgress) {
+                openBackupLauncher.launch(arrayOf("*/*"))
+            },
+            headlineContent = { Text("Restore from backup") },
+            supportingContent = { Text("Import identity and chats from a backup file") },
+            leadingContent = { Icon(Icons.Filled.Download, null) }
+        )
         HorizontalDivider()
 
         // Network Dashboard section (free tier)
@@ -1102,6 +1204,71 @@ private fun SectionHeader(title: String) {
         style = MaterialTheme.typography.labelLarge,
         color = MaterialTheme.colorScheme.primary,
         modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
+    )
+}
+
+/** What a pending backup passphrase prompt will do, plus the file it targets. */
+private sealed interface BackupDialogMode {
+    val uri: android.net.Uri
+    data class Export(override val uri: android.net.Uri) : BackupDialogMode
+    data class Import(override val uri: android.net.Uri) : BackupDialogMode
+}
+
+@Composable
+private fun BackupPassphraseDialog(
+    isExport: Boolean,
+    inProgress: Boolean,
+    onConfirm: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var passphrase by remember { mutableStateOf("") }
+    var confirm by remember { mutableStateOf("") }
+    val tooShort = passphrase.length < 6
+    val mismatch = isExport && confirm != passphrase
+    AlertDialog(
+        onDismissRequest = { if (!inProgress) onDismiss() },
+        title = { Text(if (isExport) "Encrypt backup" else "Decrypt backup") },
+        text = {
+            Column {
+                Text(
+                    if (isExport)
+                        "Choose a passphrase to encrypt your backup. You'll need it to restore — it can't be recovered."
+                    else
+                        "Enter the passphrase this backup was encrypted with.",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = passphrase,
+                    onValueChange = { passphrase = it },
+                    label = { Text("Passphrase") },
+                    singleLine = true,
+                    visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                if (isExport) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = confirm,
+                        onValueChange = { confirm = it },
+                        label = { Text("Confirm passphrase") },
+                        singleLine = true,
+                        isError = mismatch,
+                        visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = !inProgress && !tooShort && !mismatch,
+                onClick = { onConfirm(passphrase) }
+            ) { Text(if (isExport) "Export" else "Restore") }
+        },
+        dismissButton = {
+            TextButton(enabled = !inProgress, onClick = onDismiss) { Text("Cancel") }
+        }
     )
 }
 
