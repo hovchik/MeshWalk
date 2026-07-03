@@ -5,6 +5,7 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -129,6 +130,13 @@ class PeersViewModel @Inject constructor(
             if (nodeId in current) current - nodeId else current + nodeId
         }
     }
+
+    /** Mark a peer's safety number as verified (or revoke verification). */
+    fun setVerified(nodeId: String, verified: Boolean) {
+        viewModelScope.launch {
+            peerRepo.setVerified(nodeId, verified)
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -151,6 +159,59 @@ fun PeersScreen(
 
     // Nickname dialog state
     var nicknameTarget by remember { mutableStateOf<PeerNode?>(null) }
+
+    // Safety-number verification dialog state
+    var verifyTarget by remember { mutableStateOf<PeerNode?>(null) }
+
+    // ---------- Safety number dialog ----------
+    verifyTarget?.let { peer ->
+        AlertDialog(
+            onDismissRequest = { verifyTarget = null },
+            title = { Text("Verify ${peer.displayName ?: peer.nodeId.take(8)}") },
+            text = {
+                Column {
+                    Text(
+                        "Compare this safety number with your contact in person or over a " +
+                            "trusted channel. If it matches on both devices, your connection " +
+                            "is not being intercepted.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = peer.safetyNumber ?: "Unavailable (no key yet)",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                            modifier = Modifier.padding(12.dp)
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                if (peer.isVerified) {
+                    TextButton(onClick = {
+                        viewModel.setVerified(peer.nodeId, false)
+                        verifyTarget = null
+                    }) { Text("Unverify") }
+                } else {
+                    TextButton(
+                        enabled = peer.safetyNumber != null,
+                        onClick = {
+                            viewModel.setVerified(peer.nodeId, true)
+                            verifyTarget = null
+                        }
+                    ) { Text("Mark verified") }
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { verifyTarget = null }) { Text("Close") }
+            }
+        )
+    }
 
     // ---------- Confirmation dialog ----------
     if (confirmAction != null) {
@@ -337,7 +398,8 @@ fun PeersScreen(
                                 onRemove = { confirmAction = PeerAction.Remove(peer.nodeId, peer.displayName) },
                                 onBlock = { confirmAction = PeerAction.Block(peer.nodeId, peer.displayName) },
                                 onSetNickname = { nicknameTarget = peer },
-                                onToggleFavorite = { viewModel.toggleFavorite(peer.nodeId) }
+                                onToggleFavorite = { viewModel.toggleFavorite(peer.nodeId) },
+                                onVerify = { verifyTarget = peer }
                             )
                         }
                     }
@@ -361,7 +423,8 @@ fun PeersScreen(
                                 onRemove = { confirmAction = PeerAction.Remove(peer.nodeId, peer.displayName) },
                                 onBlock = { confirmAction = PeerAction.Block(peer.nodeId, peer.displayName) },
                                 onSetNickname = { nicknameTarget = peer },
-                                onToggleFavorite = { viewModel.toggleFavorite(peer.nodeId) }
+                                onToggleFavorite = { viewModel.toggleFavorite(peer.nodeId) },
+                                onVerify = { verifyTarget = peer }
                             )
                         }
                     }
@@ -385,7 +448,8 @@ fun PeersScreen(
                                 onRemove = { confirmAction = PeerAction.Remove(peer.nodeId, peer.displayName) },
                                 onBlock = { confirmAction = PeerAction.Block(peer.nodeId, peer.displayName) },
                                 onSetNickname = { nicknameTarget = peer },
-                                onToggleFavorite = { viewModel.toggleFavorite(peer.nodeId) }
+                                onToggleFavorite = { viewModel.toggleFavorite(peer.nodeId) },
+                                onVerify = { verifyTarget = peer }
                             )
                         }
                     }
@@ -539,7 +603,8 @@ private fun PeerItem(
     onRemove: () -> Unit,
     onBlock: () -> Unit,
     onSetNickname: () -> Unit,
-    onToggleFavorite: () -> Unit
+    onToggleFavorite: () -> Unit,
+    onVerify: () -> Unit = {}
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
 
@@ -581,6 +646,15 @@ private fun PeerItem(
                         contentDescription = "Anonymous",
                         modifier = Modifier.size(14.dp),
                         tint = MaterialTheme.colorScheme.outline
+                    )
+                }
+                if (peer.isVerified) {
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Icon(
+                        Icons.Filled.VerifiedUser,
+                        contentDescription = "Verified",
+                        modifier = Modifier.size(14.dp),
+                        tint = MaterialTheme.colorScheme.primary
                     )
                 }
                 if (isFavorite) {
@@ -708,6 +782,23 @@ private fun PeerItem(
                                 Icon(Icons.Filled.Edit, contentDescription = null)
                             }
                         )
+                        if (peer.publicExchangeKey != null) {
+                            DropdownMenuItem(
+                                text = { Text(if (peer.isVerified) "Verified ✓" else "Verify safety number") },
+                                onClick = {
+                                    menuExpanded = false
+                                    onVerify()
+                                },
+                                leadingIcon = {
+                                    Icon(
+                                        Icons.Filled.VerifiedUser,
+                                        contentDescription = null,
+                                        tint = if (peer.isVerified) MaterialTheme.colorScheme.primary
+                                        else LocalContentColor.current
+                                    )
+                                }
+                            )
+                        }
                         DropdownMenuItem(
                             text = {
                                 Text(if (isFavorite) "Remove from Favorites" else "Add to Favorites")

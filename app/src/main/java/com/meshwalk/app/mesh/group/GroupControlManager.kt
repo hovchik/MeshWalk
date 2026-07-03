@@ -2,6 +2,7 @@ package com.meshwalk.app.mesh.group
 
 import com.meshwalk.app.crypto.group.GroupKeyManager
 import com.meshwalk.app.crypto.keys.KeyStorage
+import com.meshwalk.app.crypto.keys.MeshKeyManager
 import com.meshwalk.app.domain.model.*
 import com.meshwalk.app.domain.repository.ConversationRepository
 import com.meshwalk.app.domain.repository.GroupRepository
@@ -27,6 +28,7 @@ class GroupControlManager @Inject constructor(
     private val peerRepo: PeerRepository,
     private val groupKeyManager: GroupKeyManager,
     private val keyStorage: KeyStorage,
+    private val keyManager: MeshKeyManager,
     private val routingEngine: MeshRoutingEngine
 ) {
     companion object {
@@ -67,11 +69,52 @@ class GroupControlManager @Inject constructor(
                 packetType = PacketType.GROUP_CONTROL,
                 encryptedPayload = payload,
                 nonce = ByteArray(12),
-                senderSignature = ByteArray(0),
+                senderSignature = signIfSelf(ourNodeId, payload),
                 flags = MeshPacket.FLAG_ACK_REQUESTED
             )
             routingEngine.sendPacket(packet)
             Timber.d("Sent group invite for ${group.name} to ${member.nodeId.take(8)}")
+        }
+    }
+
+    /**
+     * Sign a group-control payload with our identity key when we originate it
+     * as ourselves. Relayed packets whose source is another member (e.g. key
+     * forwarding) are left unsigned because we don't hold that member's key.
+     */
+    private suspend fun signIfSelf(sourceNodeId: String, payload: ByteArray): ByteArray {
+        val signingKey = keyStorage.getSigningPrivateKey(sourceNodeId) ?: return ByteArray(0)
+        return try {
+            val priv = java.security.KeyFactory.getInstance("EC")
+                .generatePrivate(java.security.spec.PKCS8EncodedKeySpec(signingKey))
+            keyManager.sign(payload, priv)
+        } catch (e: Exception) {
+            Timber.w(e, "Failed to sign group-control payload")
+            ByteArray(0)
+        }
+    }
+
+    /**
+     * Verify a group-control packet's signature against the sender's known
+     * public signing key. Returns true when the packet is acceptable:
+     * - signature present and valid, or
+     * - no signature / sender key unknown (backward-compatible: relayed key
+     *   distribution packets are unsigned, and older peers don't sign at all).
+     * Returns false ONLY when we can check a signature and it fails — that's a
+     * spoofing attempt and the packet is dropped.
+     */
+    private suspend fun verifySignature(packet: MeshPacket): Boolean {
+        if (packet.senderSignature.isEmpty()) return true
+        val pubKeyBytes = peerRepo.getPeer(packet.sourceNodeId)?.publicSigningKey ?: return true
+        return try {
+            val pub = java.security.KeyFactory.getInstance("EC")
+                .generatePublic(java.security.spec.X509EncodedKeySpec(pubKeyBytes))
+            val ok = keyManager.verify(packet.encryptedPayload, packet.senderSignature, pub)
+            if (!ok) Timber.w("Dropping group-control packet with bad signature from ${packet.sourceNodeId.take(8)}")
+            ok
+        } catch (e: Exception) {
+            Timber.w(e, "Signature check errored for ${packet.sourceNodeId.take(8)}; accepting")
+            true
         }
     }
 
@@ -81,6 +124,7 @@ class GroupControlManager @Inject constructor(
     suspend fun handleGroupControl(packet: MeshPacket) {
         val payload = packet.encryptedPayload
         if (payload.isEmpty()) return
+        if (!verifySignature(packet)) return
 
         when (payload[0]) {
             ACTION_INVITE -> handleInvite(packet)
@@ -166,7 +210,7 @@ class GroupControlManager @Inject constructor(
             packetType = PacketType.GROUP_CONTROL,
             encryptedPayload = payload,
             nonce = ByteArray(12),
-            senderSignature = ByteArray(0),
+            senderSignature = signIfSelf(ourNodeId, payload),
             flags = MeshPacket.FLAG_ACK_REQUESTED
         )
         routingEngine.sendPacket(packet)
@@ -196,7 +240,7 @@ class GroupControlManager @Inject constructor(
                     packetType = PacketType.GROUP_CONTROL,
                     encryptedPayload = keyPayload,
                     nonce = ByteArray(12),
-                    senderSignature = ByteArray(0),
+                    senderSignature = signIfSelf(ourNodeId, keyPayload),
                     flags = MeshPacket.FLAG_ACK_REQUESTED
                 )
                 routingEngine.sendPacket(keyPacket)
@@ -227,7 +271,7 @@ class GroupControlManager @Inject constructor(
             packetType = PacketType.GROUP_CONTROL,
             encryptedPayload = payload,
             nonce = ByteArray(12),
-            senderSignature = ByteArray(0),
+            senderSignature = signIfSelf(ourNodeId, payload),
             flags = 0
         )
         routingEngine.sendPacket(packet)
@@ -276,7 +320,7 @@ class GroupControlManager @Inject constructor(
             packetType = PacketType.GROUP_CONTROL,
             encryptedPayload = invitePayload,
             nonce = ByteArray(12),
-            senderSignature = ByteArray(0),
+            senderSignature = signIfSelf(ourNodeId, invitePayload),
             flags = MeshPacket.FLAG_ACK_REQUESTED
         )
         routingEngine.sendPacket(invitePacket)
@@ -297,7 +341,7 @@ class GroupControlManager @Inject constructor(
                 packetType = PacketType.GROUP_CONTROL,
                 encryptedPayload = notifyPayload,
                 nonce = ByteArray(12),
-                senderSignature = ByteArray(0),
+                senderSignature = signIfSelf(ourNodeId, notifyPayload),
                 flags = 0
             )
             routingEngine.sendPacket(notifyPacket)
@@ -394,7 +438,7 @@ class GroupControlManager @Inject constructor(
             packetType = PacketType.GROUP_CONTROL,
             encryptedPayload = keyPayload,
             nonce = ByteArray(12),
-            senderSignature = ByteArray(0),
+            senderSignature = signIfSelf(keyOwnerNodeId, keyPayload),
             flags = MeshPacket.FLAG_ACK_REQUESTED
         )
         routingEngine.sendPacket(keyPacket)
