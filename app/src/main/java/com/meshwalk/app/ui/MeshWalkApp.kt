@@ -42,6 +42,7 @@ object Routes {
     const val NETWORK = "network"
     const val SETTINGS = "settings"
     const val DIAGNOSTICS = "diagnostics"
+    const val OUTBOX = "outbox"
     const val SUBSCRIPTION = "subscription"
     const val EXPERIMENTAL = "experimental"
     const val EXP_BULLETIN = "experimental/bulletin"
@@ -222,12 +223,24 @@ fun MeshWalkApp(mainViewModel: MainViewModel = hiltViewModel()) {
                     },
                     onExperimental = {
                         navController.navigate(Routes.EXPERIMENTAL)
+                    },
+                    onOutbox = {
+                        navController.navigate(Routes.OUTBOX)
                     }
                 )
             }
 
             composable(Routes.DIAGNOSTICS) {
                 DiagnosticsScreen(onBack = { navController.popBackStack() })
+            }
+
+            composable(Routes.OUTBOX) {
+                com.meshwalk.app.ui.outbox.OutboxScreen(
+                    onBack = { navController.popBackStack() },
+                    onOpenChat = { convId, peerNodeId ->
+                        navController.navigate(Routes.chatDetail(convId, peerNodeId))
+                    }
+                )
             }
 
             composable(Routes.SUBSCRIPTION) {

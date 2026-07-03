@@ -188,6 +188,7 @@ fun SettingsScreen(
     onDiagnostics: () -> Unit,
     onSubscription: () -> Unit = {},
     onExperimental: () -> Unit = {},
+    onOutbox: () -> Unit = {},
     viewModel: SettingsViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsState()
@@ -262,6 +263,17 @@ fun SettingsScreen(
                 }
             )
         }
+        HorizontalDivider()
+
+        // Messaging section
+        SectionHeader("Messaging")
+        ListItem(
+            modifier = Modifier.clickable { onOutbox() },
+            headlineContent = { Text("Outbox") },
+            supportingContent = { Text("Messages waiting to be delivered") },
+            leadingContent = { Icon(Icons.Filled.Outbox, null) },
+            trailingContent = { Icon(Icons.Filled.ChevronRight, null) }
+        )
         HorizontalDivider()
 
         // Data & Backup section
